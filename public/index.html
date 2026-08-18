@@ -1,0 +1,452 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Muft Captions V2</title>
+  <meta name="description" content="Dynamic caption editor with word-level timing, hero word emphasis, and MP4 export." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css?v=2.0.1" />
+</head>
+<body class="project-unloaded">
+
+  <!-- Main Unified App Screen -->
+  <div class="editor-screen">
+
+    <!-- Top Bar -->
+    <header class="editor-topbar">
+      <div class="topbar-left">
+        <div class="topbar-logo">MUFT <span>CAPTIONS</span></div>
+        <span class="topbar-filename" id="topbarFilename"></span>
+      </div>
+      <div class="topbar-right">
+        <!-- Caption Tools: Loaded state only -->
+        <div class="dropdown loaded-only">
+          <button class="topbar-btn secondary" id="captionToolsBtn">
+            Caption Tools â–¾
+          </button>
+          <div class="dropdown-menu hidden" id="captionToolsMenu">
+            <button class="dropdown-item" id="stripPunctuationBtn">Strip Punctuation</button>
+            <button class="dropdown-item" id="stripEmphasisBtn">Strip Emphasis</button>
+            <button class="dropdown-item" id="removeGapsBtn">Remove Gaps</button>
+          </div>
+        </div>
+        
+        <!-- Undo / Redo controls: Loaded state only -->
+        <button class="topbar-btn secondary loaded-only" id="undoBtn" title="Undo (Ctrl+Z)">
+          ↺ Undo
+        </button>
+        <button class="topbar-btn secondary loaded-only" id="redoBtn" title="Redo (Ctrl+Y)">
+          ↻ Redo
+        </button>
+        
+        <!-- Close project/Go Home button: Loaded state only -->
+        <button class="topbar-btn secondary loaded-only" id="closeProjectBtn">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Close Project
+        </button>
+
+        <!-- Export: Loaded state only -->
+        <button class="topbar-btn primary loaded-only" id="exportBtn">
+          Export MP4
+        </button>
+      </div>
+    </header>
+
+    <!-- Workspace Wrapper -->
+    <div class="editor-workspace-wrapper">
+
+      <div class="editor-body" id="editorBody">
+
+        <!-- â”€â”€â”€ LEFT PANEL: Captions (Loaded) or Project Dashboard (Unloaded) â”€â”€â”€ -->
+        <aside class="panel panel-captions" id="captionPanel" style="width: 320px;">
+          
+          <!-- State 1: Unloaded Project List -->
+          <div id="unloadedLeftState" class="unloaded-left-state">
+            <div class="sidebar-search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" placeholder="Search projects..." id="projectSearchInput" />
+            </div>
+            
+            <div class="projects-list-wrapper">
+              <h3>Recent Compositions</h3>
+              <div class="projects-list" id="projectsGrid">
+                <!-- Project cards loaded dynamically -->
+                <div class="no-projects">No recent projects yet. Upload a video to start!</div>
+              </div>
+            </div>
+
+            <!-- Free Storage status widget -->
+            <div class="sidebar-usage">
+              <div class="usage-header">
+                <span class="usage-tag">FREE PLAN</span>
+              </div>
+              <div class="usage-item">
+                <div class="usage-label">Storage <span>0.4 GB / 5.0 GB</span></div>
+                <div class="progress-bar"><div class="progress-fill" style="width: 8%;"></div></div>
+              </div>
+              <div class="usage-item">
+                <div class="usage-label">Transcription <span>1.1 mins left</span></div>
+                <div class="progress-bar"><div class="progress-fill" style="width: 22%;"></div></div>
+              </div>
+              <button class="upgrade-btn">Upgrade Account</button>
+            </div>
+          </div>
+
+          <!-- State 2: Loaded Captions Editor -->
+          <div id="loadedLeftState" class="loaded-left-state hidden">
+            <div class="panel-header">
+              <h2>Captions</h2>
+              <div class="view-toggle">
+                <button class="toggle-btn active" id="wordViewBtn" data-view="word">WORD</button>
+                <button class="toggle-btn" id="lineViewBtn" data-view="line">LINE</button>
+              </div>
+            </div>
+            <div class="caption-list" id="captionList">
+              <!-- Compositions text blocks populate dynamically -->
+            </div>
+          </div>
+
+        </aside>
+
+
+
+        <!-- â”€â”€â”€ CENTER PANEL: Upload Area (Unloaded) or Video Preview (Loaded) â”€â”€â”€ -->
+        <main class="panel panel-video" id="videoPanel">
+          
+          <!-- State 1: Unloaded Upload Area -->
+          <div id="unloadedCenterState" class="unloaded-center-state">
+            <form id="uploadForm" class="upload-form">
+              <div class="upload-zone" id="uploadZone">
+                <input name="media" id="mediaInput" type="file" accept="video/*,audio/*,.mp4,.m4a,.mp3,.wav,.webm,.mov,.aac,.flac" required />
+                <div class="upload-zone-inner">
+                  <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                  <div class="upload-label"><span class="upload-browse">Drop your videos here</span> or click to upload</div>
+                  <div class="upload-formats">Max 2:00 minutes, 1GB &nbsp;|&nbsp; Supports: MP4, MOV</div>
+                  <div class="upload-selected" id="uploadSelected"></div>
+                </div>
+              </div>
+              <button type="submit" class="upload-btn" id="uploadBtn">
+                <span>Generate Captions</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              </button>
+            </form>
+
+            <!-- Processing loading indicator -->
+            <div class="processing hidden" id="processingState">
+              <div class="processing-spinner"></div>
+              <p class="processing-title" id="processingTitle">Processing...</p>
+              <p class="processing-detail" id="processingDetail">Uploading file...</p>
+            </div>
+          </div>
+
+          <!-- State 2: Loaded Video Player -->
+          <div id="loadedCenterState" class="loaded-center-state hidden">
+            <div class="video-container" id="videoContainer">
+              <video id="videoPlayer" playsinline></video>
+              <canvas id="captionCanvas" width="1080" height="1920"></canvas>
+              <div id="canvasSelectOutline" class="canvas-select-outline hidden">
+                <div class="handle top-left"></div>
+                <div class="handle top-right"></div>
+                <div class="handle bottom-left"></div>
+                <div class="handle bottom-right"></div>
+              </div>
+            </div>
+            <div class="video-controls">
+              <button class="ctrl-btn" id="playPauseBtn" title="Play/Pause">
+                <svg id="playIcon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <svg id="pauseIcon" class="hidden" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              </button>
+              <span class="time-display" id="timeDisplay">00:00:00 / 00:00:00</span>
+            </div>
+          </div>
+
+        </main>
+
+
+
+        <!-- â”€â”€â”€ RIGHT PANEL: LOCKED State (Unloaded) or Style Inspector (Loaded) â”€â”€â”€ -->
+        <aside class="panel panel-style" id="stylePanel" style="width: 280px;">
+          
+          <!-- State 1: Unloaded Locked Inspector -->
+          <div id="unloadedRightState" class="unloaded-right-state">
+            <div class="locked-inspector-message">
+              <svg class="locked-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <h4>Style Inspector Locked</h4>
+              <p>Please load or upload a project to edit typography, gradients, colors, and shadows.</p>
+            </div>
+          </div>
+
+          <!-- State 2: Loaded Template & Style Editor -->
+          <div id="loadedRightState" class="loaded-right-state hidden">
+            <div class="panel-header">
+              <h2>Templates</h2>
+            </div>
+
+            <!-- Template Card -->
+            <div class="template-section">
+              <div class="template-card active" id="glowTemplateCard">
+                <div class="template-preview glow-preview">
+                  <span class="tp-support">the quick</span>
+                  <span class="tp-hero">BROWN</span>
+                  <span class="tp-support">fox</span>
+                </div>
+                <div class="template-info">
+                  <span class="template-name">Muft Glow</span>
+                  <span class="template-badge">Active</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Style Accordion Controls -->
+            <div class="style-controls">
+              <div class="style-inspector-header">
+                <h3>Style Inspector</h3>
+                <label class="apply-all-checkbox-label">
+                  <input type="checkbox" id="applyToAllToggle" checked />
+                  <span>Apply to all</span>
+                </label>
+              </div>
+
+              <!-- 1. FONTS -->
+              <details class="style-accordion" open>
+                <summary>FONTS</summary>
+                <div class="accordion-content">
+                  <label class="style-label">
+                    Font Family
+                    <select id="fontSelect">
+                      <option value="'Space Grotesk', sans-serif" selected>Space Grotesk</option>
+                      <option value="'Inter', sans-serif">Inter</option>
+                      <option value="Impact, sans-serif">Impact</option>
+                      <option value="'Arial Black', sans-serif">Arial Black</option>
+                      <option value="'Segoe UI', sans-serif">Segoe UI</option>
+                      <option value="Georgia, serif">Georgia</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
+
+              <!-- 2. FORMAT -->
+              <details class="style-accordion">
+                <summary>FORMAT</summary>
+                <div class="accordion-content">
+                  <label class="style-label-checkbox">
+                    <input type="checkbox" id="heroUppercaseToggle" checked />
+                    <span>Hero Uppercase</span>
+                  </label>
+                  <label class="style-label-checkbox">
+                    <input type="checkbox" id="supportUppercaseToggle" />
+                    <span>Support Uppercase</span>
+                  </label>
+                </div>
+              </details>
+
+              <!-- 3. POSITION -->
+              <details class="style-accordion">
+                <summary>POSITION</summary>
+                <div class="accordion-content">
+                  <label class="style-label">
+                    Vertical Position: <span id="captionYVal">55</span>%
+                    <input type="range" id="captionYSlider" min="10" max="90" value="55" />
+                  </label>
+                  <label class="style-label">
+                    Horizontal Position: <span id="captionXVal">50</span>%
+                    <input type="range" id="captionXSlider" min="10" max="90" value="50" />
+                  </label>
+                </div>
+              </details>
+
+              <!-- 4. COLOR -->
+              <details class="style-accordion">
+                <summary>COLOR</summary>
+                <div class="accordion-content">
+                  <label class="style-label">
+                    Hero Color
+                    <div class="color-row">
+                      <input type="color" id="heroColorPicker" value="#f5b942" />
+                      <span class="color-hex" id="heroColorHex">#f5b942</span>
+                    </div>
+                  </label>
+                  <label class="style-label">
+                    Support Color
+                    <div class="color-row">
+                      <input type="color" id="supportColorPicker" value="#FFFFFF" />
+                      <span class="color-hex" id="supportColorHex">#FFFFFF</span>
+                    </div>
+                  </label>
+                </div>
+              </details>
+
+              <!-- 5. EMPHASIS -->
+              <details class="style-accordion">
+                <summary>EMPHASIS</summary>
+                <div class="accordion-content">
+                  <label class="style-label">
+                    Hero Size: <span id="heroSizeVal">120</span>px
+                    <input type="range" id="heroSizeSlider" min="60" max="200" value="120" />
+                  </label>
+                  <label class="style-label">
+                    Support Size: <span id="supportSizeVal">46</span>px
+                    <input type="range" id="supportSizeSlider" min="20" max="90" value="46" />
+                  </label>
+                </div>
+              </details>
+
+              <!-- 6. SPACING -->
+              <details class="style-accordion">
+                <summary>SPACING</summary>
+                <div class="accordion-content">
+                  <label class="style-label">
+                    Letter Spacing: <span id="letterSpacingVal">0</span>px
+                    <input type="range" id="letterSpacingSlider" min="-5" max="15" value="0" />
+                  </label>
+                </div>
+              </details>
+
+              <!-- 7. EFFECTS -->
+              <details class="style-accordion">
+                <summary>EFFECTS</summary>
+                <div class="accordion-content">
+                  <label class="style-label-checkbox">
+                    <input type="checkbox" id="strokeToggle" />
+                    <span>Enable Stroke border</span>
+                  </label>
+                  <label class="style-label">
+                    Stroke Color
+                    <div class="color-row">
+                      <input type="color" id="strokeColorPicker" value="#000000" />
+                      <span class="color-hex" id="strokeColorHex">#000000</span>
+                    </div>
+                  </label>
+                  <label class="style-label">
+                    Stroke Width: <span id="strokeWidthVal">0</span>px
+                    <input type="range" id="strokeWidthSlider" min="0" max="15" value="0" />
+                  </label>
+                </div>
+              </details>
+
+              <!-- 8. SHADOWS -->
+              <details class="style-accordion">
+                <summary>SHADOWS</summary>
+                <div class="accordion-content">
+                  <label class="style-label-checkbox">
+                    <input type="checkbox" id="shadowToggle" checked />
+                    <span>Enable Drop Shadow</span>
+                  </label>
+                  <label class="style-label">
+                    Shadow Blur: <span id="shadowBlurVal">15</span>px
+                    <input type="range" id="shadowBlurSlider" min="0" max="30" value="15" />
+                  </label>
+                </div>
+              </details>
+              
+              <div class="canvas-bulk-tools">
+                <button class="style-btn" id="applyAllCoordsBtn">Apply to All Comps</button>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="lowResToggle" checked />
+                  <span>Low-res preview (Fast)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- More Export Options -->
+            <div class="export-section">
+              <button class="export-main-btn" id="exportMainBtn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Export MP4
+              </button>
+              <details class="more-exports">
+                <summary>More export options</summary>
+                <button class="export-alt-btn" id="exportSrtBtn">Download SRT</button>
+              </details>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- â”€â”€â”€ BOTTOM PANEL: Timeline Ruler & Blocks â”€â”€â”€ -->
+      <div class="timeline-bar" id="timelineBar">
+        <!-- State 1: Locked Timeline Placeholder -->
+        <div id="unloadedTimelineState" class="unloaded-timeline-state">
+          <p>Timeline is empty. Please upload or open a video project to see caption blocks.</p>
+        </div>
+
+        <!-- State 2: Loaded Timeline content -->
+        <div id="loadedTimelineState" class="loaded-timeline-state hidden">
+          <div class="timeline-header">
+            <span class="timeline-label">Timeline</span>
+            <div class="timeline-zoom">
+              <button class="zoom-btn" id="zoomOutBtn">â€”</button>
+              <span class="zoom-level" id="zoomLevel">100%</span>
+              <button class="zoom-btn" id="zoomInBtn">+</button>
+            </div>
+          </div>
+          <div class="timeline-viewport" id="timelineViewport">
+            <div class="timeline-content" id="timelineContent">
+              <div class="time-ruler" id="timeRuler"></div>
+              <div class="timeline-track" id="wordTrack"></div>
+              <div class="timeline-playhead" id="timelinePlayhead">
+                <div class="playhead-head"></div>
+                <div class="playhead-line"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Exporting Progress Modal -->
+  <div class="modal-overlay hidden" id="exportModal">
+    <div class="export-modal">
+      <h3 class="modal-title">Exporting Video</h3>
+      <p class="modal-subtitle" id="exportStatus">Initializing HD export render...</p>
+      <div class="progress-bar">
+        <div class="progress-fill" id="exportProgressFill" style="width: 0%;"></div>
+      </div>
+      <div class="modal-meta">
+        <span id="exportPercent">0%</span>
+        <button class="cancel-btn" id="cancelExportBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Word Context Menu -->
+  <div id="wordContextMenu" class="context-menu hidden">
+    <button class="context-item" id="ctxSpotlightBtn">Toggle Spotlight</button>
+    <button class="context-item" id="ctxEmphasisBtn">Toggle Emphasis</button>
+    <button class="context-item" id="ctxSplitBtn">Split Caption Here</button>
+    <button class="context-item hidden" id="ctxCombineBtn">Combine Selected Words</button>
+    <button class="context-item" id="ctxAddBtn">Add Word After</button>
+    <div class="context-divider"></div>
+    <button class="context-item danger" id="ctxDeleteBtn">Delete Word</button>
+  </div>
+
+  <!-- Fullscreen Password Protection Overlay (for VPS hosting) -->
+  <div id="passwordOverlay" class="password-overlay hidden">
+    <div class="password-card">
+      <div class="password-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lock-svg"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h2>Secure Access</h2>
+      <p>Please enter password to access Muft Captions V2</p>
+      <form id="passwordForm">
+        <input type="password" id="passwordInput" placeholder="Enter Password" required autocomplete="current-password" />
+        <button type="submit" class="password-submit-btn">Unlock Application</button>
+      </form>
+      <p id="passwordError" class="password-error hidden">Incorrect password. Please try again.</p>
+    </div>
+  </div>
+
+  <script src="/template-engine.js?v=2.0.1?v=2.0.1"></script>
+  <script src="/app.js?v=2.0.1?v=2.0.1"></script>
+</body>
+</html>
+

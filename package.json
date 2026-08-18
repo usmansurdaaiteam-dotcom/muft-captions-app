@@ -1,0 +1,20 @@
+{
+  "name": "muft-captions-v2",
+  "version": "2.0.0",
+  "description": "Kalakar-style dynamic caption editor with word-level timing, hero word emphasis, and MP4 export.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js && node --check src/caption-utils.js && node --check src/composition-engine.js"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.1",
+    "@soniox/node": "latest",
+    "express": "latest",
+    "multer": "latest"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
