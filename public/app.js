@@ -637,64 +637,121 @@ function renderProjectsGrid(projects) {
   projects.forEach(proj => {
     const card = document.createElement('div');
     card.className = 'project-card';
-    
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-label', `Open ${proj.title}`);
+
     const thumbWrapper = document.createElement('div');
     thumbWrapper.className = 'project-thumbnail-wrapper';
-    
-    const videoEl = document.createElement('video');
-    videoEl.className = 'project-thumbnail-video';
-    videoEl.src = proj.videoUrl;
-    videoEl.muted = true;
-    videoEl.preload = 'metadata';
-    thumbWrapper.appendChild(videoEl);
-    
+
+    // A generated still rather than a <video> element per card: a dozen video
+    // elements each fetching their own metadata makes the dashboard crawl, and
+    // the still is cached server-side.
+    const thumb = document.createElement('img');
+    thumb.className = 'project-thumbnail';
+    thumb.alt = '';
+    thumb.loading = 'lazy';
+    thumb.src = `/api/projects/${proj.id}/thumbnail`;
+    thumb.addEventListener('error', () => thumbWrapper.classList.add('no-thumb'));
+    thumbWrapper.appendChild(thumb);
+
     const playOverlay = document.createElement('div');
     playOverlay.className = 'project-play-overlay';
-    playOverlay.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>`;
+    playOverlay.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
     thumbWrapper.appendChild(playOverlay);
-    
+
     card.appendChild(thumbWrapper);
-    
+
     const details = document.createElement('div');
     details.className = 'project-details';
-    
+
     const title = document.createElement('div');
     title.className = 'project-title';
     title.textContent = proj.title;
     details.appendChild(title);
-    
-    const dateStr = new Date(proj.createdAt).toLocaleDateString(undefined, {
-      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
+
     const meta = document.createElement('div');
     meta.className = 'project-meta';
-    meta.textContent = dateStr;
+    meta.textContent = new Date(proj.createdAt).toLocaleDateString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
     details.appendChild(meta);
-    
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'project-delete-btn';
-    deleteBtn.title = 'Delete project';
-    deleteBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`;
-    
-    deleteBtn.addEventListener('click', (e) => {
+
+    const menu = document.createElement('div');
+    menu.className = 'project-actions';
+
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'project-action-btn';
+    renameBtn.title = 'Rename';
+    renameBtn.setAttribute('aria-label', `Rename ${proj.title}`);
+    renameBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+    renameBtn.addEventListener('click', e => {
       e.stopPropagation();
-      if (confirm(`Are you sure you want to delete "${proj.title}"?`)) {
-        fetch(`/api/projects/${proj.id}`, { method: 'DELETE' })
-          .then(res => {
-            if (!res.ok) throw new Error('Delete failed');
-            loadProjectsList();
-          })
-          .catch(err => alert('Failed to delete: ' + err.message));
+      renameProject(proj);
+    });
+    menu.appendChild(renameBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'project-action-btn danger';
+    deleteBtn.title = 'Delete';
+    deleteBtn.setAttribute('aria-label', `Delete ${proj.title}`);
+    deleteBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+    deleteBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteProject(proj);
+    });
+    menu.appendChild(deleteBtn);
+
+    details.appendChild(menu);
+    card.appendChild(details);
+
+    card.addEventListener('click', () => loadProject(proj.id));
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        loadProject(proj.id);
       }
     });
-    details.appendChild(deleteBtn);
-    
-    card.appendChild(details);
-    
-    card.addEventListener('click', () => loadProject(proj.id));
-    
+
     grid.appendChild(card);
   });
+}
+
+async function renameProject(proj) {
+  const title = prompt('Project name', proj.title);
+  if (title === null) return;
+  if (!title.trim()) {
+    showNotice('A project needs a name.', 'warning', 4000);
+    return;
+  }
+  try {
+    const res = await fetch(`/api/projects/${proj.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title.trim() })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (state.projectId === proj.id) {
+      state.filename = data.title;
+      if (topbarFilename) topbarFilename.textContent = data.title;
+    }
+    loadProjectsList();
+  } catch (err) {
+    showNotice(`Rename failed: ${err.message}`, 'error', 8000);
+  }
+}
+
+async function deleteProject(proj) {
+  if (!confirm(`Delete "${proj.title}"? The video and its captions will be removed.`)) return;
+  try {
+    const res = await fetch(`/api/projects/${proj.id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (state.projectId === proj.id) await closeProject();
+    else loadProjectsList();
+  } catch (err) {
+    showNotice(`Could not delete the project: ${err.message}`, 'error', 8000);
+  }
 }
 
 async function loadProject(projectId) {
@@ -1063,12 +1120,20 @@ function showEditor() {
   startRenderLoop();
   loadProjectMedia();
 
-  // Park the playhead on the first caption. Opening at 0:00 usually lands in
-  // the silence before anyone speaks, so the preview looked empty and gave the
-  // impression that captions were not working at all.
+  // Park the playhead on the first caption's highlighted word.
+  //
+  // Opening at 0:00 usually lands in the silence before anyone speaks, so the
+  // preview looked empty. Landing on the composition's start catches the words
+  // mid entry animation, and its midpoint can fall in the gap between two words
+  // where nothing is highlighted. The highlighted word itself always shows the
+  // template at its most representative.
   const first = state.compositions[0];
   if (first) {
-    const seekTo = Math.max(0, (first.start_ms + 60) / 1000);
+    const hero = state.tokens.find(t => t.id === first.hero_token_id);
+    const target = hero
+      ? (hero.start_ms + hero.end_ms) / 2
+      : (first.start_ms + first.end_ms) / 2;
+    const seekTo = Math.max(0, target / 1000);
     const seek = () => { videoPlayer.currentTime = seekTo; };
     if (videoPlayer.readyState >= 1) seek();
     else videoPlayer.addEventListener('loadedmetadata', seek, { once: true });
@@ -2710,6 +2775,27 @@ function updateSafeZones() {
 
 if ($('lowResToggle')) $('lowResToggle').addEventListener('change', applyLowResMode);
 applyLowResMode();
+
+// ─── Keyboard shortcuts reference ─────────────────────────────────────────────
+
+function toggleShortcuts(show) {
+  const modal = $('shortcutsModal');
+  if (!modal) return;
+  const visible = show === undefined ? modal.classList.contains('hidden') : show;
+  modal.classList.toggle('hidden', !visible);
+}
+
+if ($('shortcutsBtn')) $('shortcutsBtn').addEventListener('click', () => toggleShortcuts());
+if ($('closeShortcutsBtn')) $('closeShortcutsBtn').addEventListener('click', () => toggleShortcuts(false));
+if ($('shortcutsModal')) {
+  $('shortcutsModal').addEventListener('click', e => {
+    // Clicking the backdrop rather than the dialog closes it.
+    if (e.target === $('shortcutsModal')) toggleShortcuts(false);
+  });
+}
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') toggleShortcuts(false);
+});
 
 if ($('safeZoneBtn')) {
   $('safeZoneBtn').addEventListener('click', () => {

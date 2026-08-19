@@ -31,7 +31,8 @@ import { startExport, getJob, cancelJob, getVideoInfo } from './src/render/expor
 import {
   configureCache as configureMediaCache,
   getWaveform,
-  getFilmstrip
+  getFilmstrip,
+  getPoster
 } from './src/media/analyze.js';
 
 // ─── Credentials ────────────────────────────────────────────────────────────────
@@ -710,6 +711,36 @@ app.get('/api/projects/:id/media', checkAuth, async (req, res) => {
     });
   } catch (error) {
     res.status(404).json({ error: error?.message || 'Project media unavailable.' });
+  }
+});
+
+app.get('/api/projects/:id/thumbnail', checkAuth, async (req, res) => {
+  try {
+    const videoPath = await resolveProjectVideo(req.params.id);
+    const info = await getVideoInfo(videoPath);
+    const poster = await getPoster(videoPath, info.duration);
+    res.type('image/jpeg').set('Cache-Control', 'private, max-age=86400').sendFile(poster);
+  } catch (error) {
+    res.status(404).json({ error: error?.message || 'Thumbnail unavailable.' });
+  }
+});
+
+/** Rename a project without touching anything else in it. */
+app.patch('/api/projects/:id', checkAuth, async (req, res) => {
+  try {
+    const project = await readProject(req.params.id);
+    const title = String(req.body?.title || '').trim().slice(0, 200);
+    if (!title) return res.status(400).json({ error: 'A project needs a name.' });
+
+    project.title = title;
+    project.updatedAt = Date.now();
+    await writeFile(
+      path.join(PROJECTS_DIR, `${req.params.id}.json`),
+      JSON.stringify(project, null, 2)
+    );
+    res.json({ success: true, title });
+  } catch (error) {
+    res.status(404).json({ error: 'Project not found.' });
   }
 });
 

@@ -51,6 +51,8 @@
           Close Project
         </button>
 
+        <button class="topbar-btn secondary" id="shortcutsBtn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
+
         <!-- Export: Loaded state only -->
         <button class="topbar-btn primary loaded-only" id="exportBtn">
           Export MP4
@@ -160,8 +162,8 @@
                   <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                   </svg>
-                  <div class="upload-label"><span class="upload-browse">Drop your videos here</span> or click to upload</div>
-                  <div class="upload-formats">Max 2:00 minutes, 1GB &nbsp;|&nbsp; Supports: MP4, MOV</div>
+                  <div class="upload-label"><span class="upload-browse">Drop a video here</span> or click to choose one</div>
+                  <div class="upload-formats">Up to 700 MB &nbsp;|&nbsp; MP4, MOV, WebM, or an audio file</div>
                   <div class="upload-selected" id="uploadSelected"></div>
                 </div>
               </div>
@@ -568,6 +570,26 @@
     <button class="context-item" id="ctxAddBtn">Add Word After</button>
     <div class="context-divider"></div>
     <button class="context-item danger" id="ctxDeleteBtn">Delete Word</button>
+  </div>
+
+  <!-- Keyboard shortcuts reference -->
+  <div id="shortcutsModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
+    <div class="export-modal">
+      <h3 id="shortcutsTitle">Keyboard shortcuts</h3>
+      <dl class="shortcut-list">
+        <dt><kbd>Space</kbd></dt><dd>Play or pause</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></dt><dd>Redo</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>F</kbd></dt><dd>Find and replace</dd>
+        <dt><kbd>Click</kbd> a word</dt><dd>Make it the highlighted word</dd>
+        <dt><kbd>Right-click</kbd> a word</dt><dd>Split, combine, delete or spotlight</dd>
+        <dt><kbd>Drag</kbd> on the video</dt><dd>Move the captions</dd>
+        <dt><kbd>Drag</kbd> a corner handle</dt><dd>Resize the captions</dd>
+        <dt><kbd>Drag</kbd> a timeline block</dt><dd>Retime a word</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close this dialog</dd>
+      </dl>
+      <button class="modal-cancel-btn" id="closeShortcutsBtn">Close</button>
+    </div>
   </div>
 
   <!-- Fullscreen Password Protection Overlay (for VPS hosting) -->

@@ -188,6 +188,34 @@ export async function getFilmstrip(videoPath, durationSec, frames = null) {
 }
 
 /**
+ * A single representative frame, for project cards.
+ * Taken a little way in, because the first frame of a clip is often black.
+ */
+export async function getPoster(videoPath, durationSec, height = 180) {
+  const dir = await ensureCacheDir();
+  const key = await cacheKey(videoPath, `poster${height}`);
+  const imagePath = path.join(dir, `${key}.jpg`);
+
+  try {
+    await stat(imagePath);
+    return imagePath;
+  } catch { /* not cached yet */ }
+
+  const seek = Math.min(Math.max(0.5, (durationSec || 2) * 0.1), Math.max(0.5, (durationSec || 2) - 0.2));
+  await execFileAsync('ffmpeg', [
+    '-v', 'error',
+    '-ss', seek.toFixed(2),
+    '-i', videoPath,
+    '-frames:v', '1',
+    '-vf', `scale=-1:${height}`,
+    '-q:v', '5',
+    '-y', imagePath
+  ], { maxBuffer: 8 * 1024 * 1024, timeout: 60000 });
+
+  return imagePath;
+}
+
+/**
  * Delete cache entries whose source file is gone.
  * Called after a project is removed so the cache does not outlive its media.
  */
