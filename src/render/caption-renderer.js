@@ -758,14 +758,23 @@ function drawWord(ctx, word, style, template, scale, anim) {
 
   drawBackground(ctx, style, box, scale);
 
-  // Glow: repeated shadowed passes build a soft halo canvas can't do in one go.
+  // Glow: soft halo built from blurred copies of the word behind it.
+  //
+  // Deliberately not using shadowBlur with a near-transparent fill, which is the
+  // usual trick: the shadow's strength is scaled by the source alpha, and the
+  // browser and the export rasteriser disagree about how, so glow templates
+  // looked materially different in the editor than in the rendered file. An
+  // explicit blur filter behaves the same in both.
   if (style.glow && style.glow.enabled !== false && Array.isArray(style.glow.passes)) {
+    const glowColor = style.glow.color || '#FFFFFF';
     for (const pass of style.glow.passes) {
       ctx.save();
-      ctx.shadowColor = withAlpha(style.glow.color || '#FFFFFF', pass.opacity === undefined ? 0.6 : pass.opacity);
-      ctx.shadowBlur = (pass.blur || 20) * scale;
-      ctx.fillStyle = withAlpha(style.glow.color || '#FFFFFF', 0.001);
-      for (let i = 0; i < (pass.repeat || 2); i++) ctx.fillText(text, drawX, baselineY);
+      // CSS blur() takes a standard deviation, roughly half of shadowBlur's
+      // radius, so halve the authored value to keep the same visual spread.
+      ctx.filter = `blur(${Math.max(1, (pass.blur || 20) * scale * 0.5)}px)`;
+      ctx.globalAlpha = alpha * (pass.opacity === undefined ? 0.6 : pass.opacity);
+      ctx.fillStyle = glowColor;
+      for (let i = 0; i < (pass.repeat || 1); i++) ctx.fillText(text, drawX, baselineY);
       ctx.restore();
     }
   }

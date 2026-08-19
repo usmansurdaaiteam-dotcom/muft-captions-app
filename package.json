@@ -1,18 +1,28 @@
 {
   "name": "muft-captions-v2",
-  "version": "2.0.0",
-  "description": "Kalakar-style dynamic caption editor with word-level timing, hero word emphasis, and MP4 export.",
+  "version": "2.1.0",
+  "description": "Caption editor with word-level timing, a data-driven template engine, and burned-in MP4 export.",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check src/caption-utils.js && node --check src/composition-engine.js"
+    "fonts": "node scripts/fetch-fonts.mjs",
+    "check": "node --check server.js && node --check public/app.js && node --check src/caption-utils.js && node --check src/composition-engine.js",
+    "test:templates": "node scripts/check-templates.mjs",
+    "test:export": "node scripts/test-export.mjs",
+    "test:ui": "node scripts/test-editor-ui.mjs",
+    "test:wysiwyg": "node scripts/test-wysiwyg.mjs",
+    "test": "npm run check && npm run test:templates",
+    "preview:templates": "node scripts/preview-templates.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.1",
     "@soniox/node": "latest",
     "express": "latest",
     "multer": "latest"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0"
   },
   "engines": {
     "node": ">=20.0.0"

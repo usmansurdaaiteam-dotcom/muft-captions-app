@@ -60,21 +60,23 @@ function showPasswordPrompt() {
 
 // Check auth status on load
 document.addEventListener('DOMContentLoaded', () => {
-  const token = localStorage.getItem('muft_auth_token');
-  if (!token) {
-    showPasswordPrompt();
-  } else {
-    // Validate token status
-    fetch('/api/auth/status')
-      .then(r => r.json())
-      .then(data => {
-        if (!data.authenticated) {
-          localStorage.removeItem('muft_auth_token');
-          showPasswordPrompt();
-        }
-      })
-      .catch(() => {});
-  }
+  // Confirm the session before asking for any project data. Fetching the
+  // project list first produced a guaranteed 401 on every cold load.
+  fetch('/api/auth/status')
+    .then(r => r.json())
+    .then(data => {
+      if (data.authenticated) {
+        if (data.token) localStorage.setItem('muft_auth_token', data.token);
+        loadProjectsList();
+      } else {
+        localStorage.removeItem('muft_auth_token');
+        showPasswordPrompt();
+      }
+    })
+    .catch(err => {
+      console.error('[Auth] Could not reach the server:', err);
+      showPasswordPrompt();
+    });
 
   const passwordForm = document.getElementById('passwordForm');
   if (passwordForm) {
@@ -142,12 +144,46 @@ const state = {
   userHoveringCaptions: false
 };
 
+/**
+ * Fonts already asked for, so each is only requested once.
+ *
+ * Drawing to a canvas does not trigger an @font-face download the way DOM text
+ * does — the canvas silently falls back to a system face instead. That made the
+ * preview measure and lay out with the wrong font while the export used the
+ * real one, so the two disagreed on wrapping and size. Each font a template
+ * needs is therefore loaded explicitly before it is relied on.
+ */
+const requestedFonts = new Set();
+
+async function ensureCaptionFont(family, weight) {
+  if (!window.CaptionFonts || !document.fonts) return;
+
+  const resolved = window.CaptionFonts.resolveFont(family, weight);
+  const specs = [
+    `400 40px "${window.CaptionFonts.aliasFor(resolved.family, resolved.weight)}"`,
+    `400 40px "${window.CaptionFonts.ARABIC_FALLBACK_ALIAS}"`
+  ].filter(spec => !requestedFonts.has(spec));
+
+  if (!specs.length) return;
+  for (const spec of specs) requestedFonts.add(spec);
+
+  try {
+    await Promise.all(specs.map(spec => document.fonts.load(spec)));
+    // Measurements taken with the fallback face are now stale.
+    if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
+    renderCaptions();
+  } catch (err) {
+    console.warn('[fonts] Could not load a caption font:', err);
+  }
+}
+
 /** Rebuild the resolved template from the template id plus overrides. */
 function refreshTemplate() {
   if (!window.CaptionTemplates || !window.applyStyleOverrides) return;
   const base = window.CaptionTemplates.getTemplate(state.templateId);
   state.template = window.applyStyleOverrides(base, state.styleOverrides);
   if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
+  ensureCaptionFont(state.template.font.family, state.template.font.weight);
 }
 
 // â”€â”€â”€ Project Database & Autosave API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -788,6 +824,17 @@ function showEditor() {
   renderCaptionList();
   syncStyleInspector();
   startRenderLoop();
+
+  // Park the playhead on the first caption. Opening at 0:00 usually lands in
+  // the silence before anyone speaks, so the preview looked empty and gave the
+  // impression that captions were not working at all.
+  const first = state.compositions[0];
+  if (first) {
+    const seekTo = Math.max(0, (first.start_ms + 60) / 1000);
+    const seek = () => { videoPlayer.currentTime = seekTo; };
+    if (videoPlayer.readyState >= 1) seek();
+    else videoPlayer.addEventListener('loadedmetadata', seek, { once: true });
+  }
 }
 
 // Registered once at load. Attaching this inside showEditor added another
@@ -2584,7 +2631,9 @@ if (captionToolsBtn && captionToolsMenu) {
 // â”€â”€â”€ Initialization on Boot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 initWordContextMenu();
-loadProjectsList();
+
+// Exposed for debugging and for the headless UI test to inspect editor state.
+window.__muft = { state, refreshTemplate, renderCaptions, commitEdit };
 
 if ($('undoBtn')) $('undoBtn').addEventListener('click', undo);
 if ($('redoBtn')) $('redoBtn').addEventListener('click', redo);
