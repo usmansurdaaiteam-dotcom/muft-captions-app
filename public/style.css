@@ -498,11 +498,13 @@ input, select, textarea { font-family: var(--font-ui); }
 
 .video-container {
   position: relative;
-  width: auto;
-  flex: 1;
-  min-height: 0;
+  /* The ratio is set from the loaded video; 9/16 is only the starting value.
+     Locking it to 9/16 made anything non-vertical preview differently from the
+     file that was exported. */
   aspect-ratio: 9 / 16;
-  max-height: calc(100vh - 48px - 180px - 44px);
+  min-height: 0;
+  max-width: 100%;
+  max-height: calc(100vh - 48px - 180px - 52px);
   background: #0a0a0a;
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -952,7 +954,6 @@ select:focus { border-color: var(--accent); }
 
 .timeline-content {
   position: relative;
-  height: 100%;
   min-width: 100%;
 }
 
@@ -976,9 +977,12 @@ select:focus { border-color: var(--accent); }
   padding-left: 4px;
 }
 
+/* Each track has a fixed height so they stack predictably. The word track used
+   to fill all remaining space, which pushed the video and audio tracks past the
+   bottom of the viewport where they were clipped out of sight. */
 .word-track, .timeline-track {
   position: relative;
-  height: calc(100% - 24px);
+  height: 64px;
   padding: 8px 0;
 }
 
@@ -2171,4 +2175,131 @@ select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ═══════════════════ MULTI-TRACK TIMELINE ═══════════════════ */
+
+.timeline-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.track-gutter {
+  flex-shrink: 0;
+  width: 58px;
+  padding-top: 22px; /* clears the ruler */
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel-alt);
+  display: flex;
+  flex-direction: column;
+}
+
+.track-name {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 8px;
+  height: 56px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Gutter rows line up with the track heights above. */
+.track-name:nth-child(1) { height: 64px; }
+.track-name:nth-child(2) { height: 56px; }
+.track-name:nth-child(3) { height: 48px; border-bottom: none; }
+
+.timeline-track-film,
+.timeline-track-audio {
+  position: relative;
+  border-top: 1px solid var(--border);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.timeline-track-film { height: 56px; padding: 0; }
+.timeline-track-audio { height: 48px; padding: 0; }
+
+.timeline-track-film canvas,
+.timeline-track-audio canvas {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+/* ═══════════════════ SAFE ZONES ═══════════════════ */
+
+.safe-zones {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 400;
+}
+
+.safe-zones.hidden { display: none; }
+
+.safe-zone {
+  position: absolute;
+  border: 1px dashed rgba(255, 68, 68, 0.75);
+  background: rgba(255, 68, 68, 0.09);
+}
+
+.safe-zone span {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 190, 190, 0.9);
+  text-shadow: 0 1px 3px #000;
+}
+
+/* Wide formats only lose a modest strip at the bottom. */
+.safe-zone-top { top: 0; left: 0; right: 0; height: 8%; }
+.safe-zone-right { top: 20%; right: 0; width: 18%; height: 45%; display: none; }
+.safe-zone-bottom { bottom: 0; left: 0; right: 0; height: 10%; }
+
+/* Vertical formats carry the heavy platform interface. */
+.safe-zones.vertical .safe-zone-top { height: 12%; }
+.safe-zones.vertical .safe-zone-right { display: block; }
+.safe-zones.vertical .safe-zone-bottom { height: 22%; }
+
+/* ═══════════════════ VIDEO CONTROL EXTRAS ═══════════════════ */
+
+.video-meta {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.ctrl-toggle {
+  padding: 5px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.ctrl-toggle:hover { color: var(--text); border-color: var(--border-light); }
+
+.ctrl-toggle.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
 }

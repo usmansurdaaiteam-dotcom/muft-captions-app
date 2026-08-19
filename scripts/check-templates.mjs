@@ -27,6 +27,18 @@ registerFonts();
 const W = 1080;
 const H = 1920;
 
+/**
+ * Captions must stay in frame at any aspect, not just 9:16. Scaling by width
+ * alone previously put the vertical anchor past the bottom of a landscape frame,
+ * so a 16:9 export had no visible captions at all.
+ */
+const ASPECTS = [
+  { name: '9:16', w: 1080, h: 1920 },
+  { name: '1:1', w: 1080, h: 1080 },
+  { name: '16:9', w: 1920, h: 1080 },
+  { name: '4:5', w: 1080, h: 1350 }
+];
+
 const WORDS = ['yeh', 'wala', 'template', 'bilkul', 'insane', 'hai'];
 const tokens = WORDS.map((text, i) => ({
   id: i + 1,
@@ -48,13 +60,13 @@ function makeComposition(compType) {
 }
 
 /** Alpha coverage and bounding box of everything drawn on a transparent canvas. */
-function inkStats(ctx) {
-  const { data } = ctx.getImageData(0, 0, W, H);
+function inkStats(ctx, w, h) {
+  const { data } = ctx.getImageData(0, 0, w, h);
   let count = 0;
-  let minX = W, minY = H, maxX = -1, maxY = -1;
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (data[(y * W + x) * 4 + 3] > 12) {
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] > 12) {
         count++;
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
@@ -63,15 +75,15 @@ function inkStats(ctx) {
       }
     }
   }
-  return { coverage: count / (W * H), minX, minY, maxX, maxY, empty: maxX < 0 };
+  return { coverage: count / (w * h), minX, minY, maxX, maxY, empty: maxX < 0 };
 }
 
-function render(template, comp, timeMs) {
-  const canvas = createCanvas(W, H);
+function render(template, comp, timeMs, w = W, h = H) {
+  const canvas = createCanvas(w, h);
   const ctx = canvas.getContext('2d');
   clearLayoutCache();
-  renderCaptionFrame(ctx, timeMs, [comp], tokenMap, template, W, H);
-  return inkStats(ctx);
+  renderCaptionFrame(ctx, timeMs, [comp], tokenMap, template, w, h);
+  return inkStats(ctx, w, h);
 }
 
 const failures = [];
@@ -131,6 +143,27 @@ for (let i = 0; i < TEMPLATES.length; i++) {
       if (stats.empty) problems.push(`drew nothing for comp_type "${compType}"`);
     } catch (err) {
       problems.push(`threw on comp_type "${compType}": ${err.message}`);
+    }
+  }
+
+  // Every aspect ratio must keep the caption inside the frame.
+  for (const aspect of ASPECTS) {
+    const stats = render(template, comp, 2 * 400 + 300, aspect.w, aspect.h);
+    if (stats.empty) {
+      problems.push(`drew nothing at ${aspect.name}`);
+      continue;
+    }
+    if (stats.minX < 0 || stats.minY < 0 || stats.maxX > aspect.w - 1 || stats.maxY > aspect.h - 1) {
+      problems.push(
+        `${aspect.name}: caption falls outside the frame ` +
+        `(${stats.minX},${stats.minY})-(${stats.maxX},${stats.maxY}) in ${aspect.w}x${aspect.h}`
+      );
+    }
+    // Text that fills most of the frame height means the size scaling is wrong
+    // for this aspect, not that the template is simply bold.
+    const heightShare = (stats.maxY - stats.minY) / aspect.h;
+    if (heightShare > 0.55) {
+      problems.push(`${aspect.name}: caption occupies ${(heightShare * 100).toFixed(0)}% of frame height`);
     }
   }
 

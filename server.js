@@ -22,7 +22,12 @@ import { registerFonts } from './src/render/fonts-node.js';
 import { getTemplate, listTemplates, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID } from './src/render/templates.js';
 import { listFamilies, buildFontFaceCss } from './src/render/fonts.js';
 import { applyStyleOverrides, sanitizeOverrides } from './src/render/style-overrides.js';
-import { startExport, getJob, cancelJob } from './src/render/exporter.js';
+import { startExport, getJob, cancelJob, getVideoInfo } from './src/render/exporter.js';
+import {
+  configureCache as configureMediaCache,
+  getWaveform,
+  getFilmstrip
+} from './src/media/analyze.js';
 
 // ─── Credentials ────────────────────────────────────────────────────────────────
 // Environment variables win; the inline values are the existing internal-team
@@ -208,8 +213,11 @@ const __dirname = path.dirname(__filename);
 // Ensure uploads & projects dirs exist
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const PROJECTS_DIR = path.join(__dirname, 'projects');
+const CACHE_DIR = path.join(__dirname, 'cache');
 await mkdir(UPLOADS_DIR, { recursive: true }).catch(() => {});
 await mkdir(PROJECTS_DIR, { recursive: true }).catch(() => {});
+await mkdir(CACHE_DIR, { recursive: true }).catch(() => {});
+configureMediaCache(CACHE_DIR);
 
 const app = express();
 
@@ -266,6 +274,25 @@ const PROJECT_VERSION = 2;
 
 function resolveTemplateId(id) {
   return TEMPLATE_IDS.includes(id) ? id : DEFAULT_TEMPLATE_ID;
+}
+
+/** Map an uploads-relative URL to a path inside uploads/, refusing traversal. */
+function resolveUploadPath(videoUrl) {
+  const filename = path.basename(String(videoUrl || '').replace(/^\/uploads\//, ''));
+  if (!filename) throw new Error('No video file for this project.');
+  return path.join(UPLOADS_DIR, filename);
+}
+
+async function readProject(id) {
+  const data = await readFile(path.join(PROJECTS_DIR, `${id}.json`), 'utf-8');
+  return migrateProject(JSON.parse(data));
+}
+
+async function resolveProjectVideo(id) {
+  const project = await readProject(id);
+  const videoPath = resolveUploadPath(project.videoUrl);
+  await stat(videoPath);
+  return videoPath;
 }
 
 /**
@@ -584,8 +611,7 @@ app.get('/api/projects', checkAuth, async (req, res) => {
  */
 app.get('/api/projects/:id', checkAuth, async (req, res) => {
   try {
-    const data = await readFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), 'utf-8');
-    const project = migrateProject(JSON.parse(data));
+    const project = await readProject(req.params.id);
     // Send the resolved template alongside the project so the client never has
     // to reconstruct style data from the saved file.
     res.json({
@@ -594,6 +620,64 @@ app.get('/api/projects/:id', checkAuth, async (req, res) => {
     });
   } catch (error) {
     res.status(404).json({ error: 'Project not found.' });
+  }
+});
+
+/**
+ * GET /api/projects/:id/media
+ * Timeline aids for a project: video dimensions, an audio waveform, and the
+ * metadata for its filmstrip image. One request rather than three, because the
+ * timeline needs all of it before it can draw anything.
+ */
+app.get('/api/projects/:id/media', checkAuth, async (req, res) => {
+  try {
+    const videoPath = await resolveProjectVideo(req.params.id);
+    const info = await getVideoInfo(videoPath);
+
+    // A missing waveform or filmstrip should degrade the timeline, not break
+    // the editor, so each is reported independently.
+    const [waveform, filmstrip] = await Promise.all([
+      getWaveform(videoPath).catch(err => {
+        console.warn(`[media] waveform failed: ${err.message}`);
+        return null;
+      }),
+      getFilmstrip(videoPath, info.duration).catch(err => {
+        console.warn(`[media] filmstrip failed: ${err.message}`);
+        return null;
+      })
+    ]);
+
+    res.json({
+      video: {
+        width: info.width,
+        height: info.height,
+        duration: info.duration,
+        fps: info.fps,
+        hasAudio: info.hasAudio,
+        aspectRatio: info.height ? info.width / info.height : 9 / 16
+      },
+      waveform: waveform ? { peaks: waveform.peaks, hasAudio: waveform.hasAudio } : null,
+      filmstrip: filmstrip ? {
+        url: `/api/projects/${req.params.id}/filmstrip`,
+        frames: filmstrip.frames,
+        frameWidth: filmstrip.frameWidth,
+        frameHeight: filmstrip.frameHeight,
+        totalWidth: filmstrip.totalWidth
+      } : null
+    });
+  } catch (error) {
+    res.status(404).json({ error: error?.message || 'Project media unavailable.' });
+  }
+});
+
+app.get('/api/projects/:id/filmstrip', checkAuth, async (req, res) => {
+  try {
+    const videoPath = await resolveProjectVideo(req.params.id);
+    const info = await getVideoInfo(videoPath);
+    const strip = await getFilmstrip(videoPath, info.duration);
+    res.type('image/jpeg').set('Cache-Control', 'private, max-age=86400').sendFile(strip.imagePath);
+  } catch (error) {
+    res.status(404).json({ error: error?.message || 'Filmstrip unavailable.' });
   }
 });
 
@@ -710,10 +794,9 @@ app.post('/api/export', checkAuth, async (req, res) => {
       return res.status(400).json({ error: 'Missing videoUrl.' });
     }
 
-    // Resolve the source video, refusing anything that escapes uploads/.
-    const videoFilename = path.basename(videoUrl.replace(/^\/uploads\//, ''));
-    const videoPath = path.join(UPLOADS_DIR, videoFilename);
+    let videoPath;
     try {
+      videoPath = resolveUploadPath(videoUrl);
       await stat(videoPath);
     } catch {
       return res.status(404).json({ error: 'Source video not found. Please re-upload.' });

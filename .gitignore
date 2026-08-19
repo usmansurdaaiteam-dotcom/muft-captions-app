@@ -20,3 +20,4 @@ template-contact-sheet.png
 .env.*.local
 .DS_Store
 Thumbs.db
+cache/

@@ -136,6 +136,11 @@ const state = {
   templateList: [],
   templateCategory: 'All',
   templateQuery: '',
+  // Timeline aids and the source video's shape
+  media: null,
+  filmstripImage: null,
+  videoAspect: 9 / 16,
+  safeZonesVisible: false,
   // Export
   exporting: false,
   exportJobId: null,
@@ -824,6 +829,7 @@ function showEditor() {
   renderCaptionList();
   syncStyleInspector();
   startRenderLoop();
+  loadProjectMedia();
 
   // Park the playhead on the first caption. Opening at 0:00 usually lands in
   // the silence before anyone speaks, so the preview looked empty and gave the
@@ -841,9 +847,20 @@ function showEditor() {
 // listener every time a project was opened.
 videoPlayer.addEventListener('loadedmetadata', () => {
   state.videoDuration = videoPlayer.duration;
+  applyVideoAspect();
+  updateVideoMeta();
   updateTimeDisplay();
   renderTimeline();
 });
+
+function updateVideoMeta() {
+  const el = $('videoMeta');
+  if (!el) return;
+  const w = videoPlayer.videoWidth;
+  const h = videoPlayer.videoHeight;
+  const fps = state.media && state.media.video && state.media.video.fps;
+  el.textContent = w && h ? `${w}x${h}${fps ? ` · ${fps}fps` : ''}` : '';
+}
 
 async function closeProject() {
   if (state.projectId) {
@@ -868,6 +885,8 @@ async function closeProject() {
   state.currentTime = 0;
   state.activeCompositionId = null;
   state.styleOverrides = {};
+  state.media = null;
+  state.filmstripImage = null;
   state.undoStack = [];
   state.redoStack = [];
   updateUndoRedoButtons();
@@ -1561,7 +1580,7 @@ function getActiveCaptionBox(ctx) {
   const tokenMap = new Map(state.tokens.map(t => [t.id, t]));
   const bounds = window.CaptionRenderer.getCaptionBounds(
     ctx, state.currentTime * 1000, state.compositions, tokenMap,
-    state.template, captionCanvas.width
+    state.template, captionCanvas.width, captionCanvas.height
   );
   if (!bounds) return null;
 
@@ -1692,8 +1711,8 @@ function renderCaptions() {
       
       // Reposition HTML select box
       const rect = canvas.getBoundingClientRect();
-      const ratioX = rect.width / 1080;
-      const ratioY = rect.height / 1920;
+      const ratioX = rect.width / state.baseCanvasWidth;
+      const ratioY = rect.height / state.baseCanvasHeight;
       if (outline) {
         outline.style.left = (box.x * ratioX) + 'px';
         outline.style.top = (box.y * ratioY) + 'px';
@@ -1713,6 +1732,138 @@ function renderCaptions() {
 
 // â”€â”€â”€ Timeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// ─── Media tracks (filmstrip + waveform) ──────────────────────────────────────
+
+/**
+ * Fetch the timeline's visual aids for the open project.
+ *
+ * The server generates and caches them, because decoding audio and frames in
+ * the browser for every project open would be far slower and would mean
+ * downloading the whole video before the timeline could draw anything.
+ */
+async function loadProjectMedia() {
+  state.media = null;
+  if (!state.projectId) return;
+
+  const projectId = state.projectId;
+  try {
+    const res = await fetch(`/api/projects/${projectId}/media`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const media = await res.json();
+
+    // The user may have closed or switched project while this was in flight.
+    if (state.projectId !== projectId) return;
+
+    state.media = media;
+    if (media.filmstrip) {
+      const image = new Image();
+      image.onload = () => {
+        if (state.projectId !== projectId) return;
+        state.filmstripImage = image;
+        renderTimeline();
+      };
+      image.src = media.filmstrip.url;
+    }
+    applyVideoAspect();
+    renderTimeline();
+  } catch (err) {
+    console.warn('[Timeline] Media unavailable:', err.message);
+  }
+}
+
+/** Draw thumbnails across the video track, one per slot of time. */
+function renderFilmstripTrack(totalWidth, duration) {
+  const canvas = $('filmstripCanvas');
+  if (!canvas) return;
+
+  const strip = state.media && state.media.filmstrip;
+  const image = state.filmstripImage;
+  const height = 56;
+
+  canvas.width = Math.round(totalWidth);
+  canvas.height = height;
+  canvas.style.width = totalWidth + 'px';
+  canvas.style.height = height + 'px';
+
+  const c = canvas.getContext('2d');
+  c.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!strip || !image || !duration) return;
+
+  // Draw each thumbnail at its natural aspect and repeat as needed to fill the
+  // track. Stretching the whole strip to the track width instead would smear
+  // the frames badly at high zoom.
+  const drawWidth = Math.max(8, Math.round(strip.frameWidth * (height / strip.frameHeight)));
+  for (let x = 0; x < canvas.width; x += drawWidth) {
+    const timeFraction = x / canvas.width;
+    const frame = Math.min(strip.frames - 1, Math.floor(timeFraction * strip.frames));
+    c.drawImage(
+      image,
+      frame * strip.frameWidth, 0, strip.frameWidth, strip.frameHeight,
+      x, 0, drawWidth, height
+    );
+  }
+
+  // Seam lines make the strip read as discrete frames rather than a smear.
+  c.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+  c.lineWidth = 1;
+  for (let x = drawWidth; x < canvas.width; x += drawWidth) {
+    c.beginPath();
+    c.moveTo(x + 0.5, 0);
+    c.lineTo(x + 0.5, height);
+    c.stroke();
+  }
+}
+
+/** Draw the audio envelope, mirrored around the track's centre line. */
+function renderWaveformTrack(totalWidth) {
+  const canvas = $('waveformCanvas');
+  if (!canvas) return;
+
+  const height = 48;
+  canvas.width = Math.round(totalWidth);
+  canvas.height = height;
+  canvas.style.width = totalWidth + 'px';
+  canvas.style.height = height + 'px';
+
+  const c = canvas.getContext('2d');
+  c.clearRect(0, 0, canvas.width, canvas.height);
+
+  const wave = state.media && state.media.waveform;
+  const mid = height / 2;
+
+  c.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  c.beginPath();
+  c.moveTo(0, mid + 0.5);
+  c.lineTo(canvas.width, mid + 0.5);
+  c.stroke();
+
+  if (!wave || !wave.peaks || !wave.peaks.length || !wave.hasAudio) {
+    c.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    c.font = '11px sans-serif';
+    c.textBaseline = 'middle';
+    c.fillText(wave && !wave.hasAudio ? 'No audio track' : 'Waveform unavailable', 8, mid);
+    return;
+  }
+
+  const peaks = wave.peaks;
+  c.fillStyle = 'rgba(245, 185, 66, 0.55)';
+  for (let x = 0; x < canvas.width; x++) {
+    // Each pixel column covers a range of peaks; take the loudest so quiet
+    // pixels never hide a transient.
+    const from = Math.floor((x / canvas.width) * peaks.length);
+    const to = Math.max(from + 1, Math.floor(((x + 1) / canvas.width) * peaks.length));
+    let peak = 0;
+    for (let i = from; i < to && i < peaks.length; i++) {
+      if (peaks[i] > peak) peak = peaks[i];
+    }
+    const amplitude = Math.max(1, peak * (mid - 2));
+    c.fillRect(x, mid - amplitude, 1, amplitude * 2);
+  }
+}
+
+// ─── Timeline ─────────────────────────────────────────────────────────────────
+
 function renderTimeline() {
   const duration = state.videoDuration;
   if (!duration) return;
@@ -1720,6 +1871,9 @@ function renderTimeline() {
   const pxPerSec = (state.zoomLevel / 100) * 150; // 150px per second at 100%
   const totalWidth = Math.max(duration * pxPerSec, timelineViewport.clientWidth);
   timelineContent.style.width = totalWidth + 'px';
+
+  renderFilmstripTrack(totalWidth, duration);
+  renderWaveformTrack(totalWidth);
 
   // Ruler marks
   timeRuler.innerHTML = '';
@@ -2129,14 +2283,68 @@ if ($('templateSearch')) {
 function applyLowResMode() {
   const isLowRes = $('lowResToggle') ? $('lowResToggle').checked : false;
   const factor = isLowRes ? 0.5 : 1.0;
-  captionCanvas.width = state.baseCanvasWidth * factor;
-  captionCanvas.height = state.baseCanvasHeight * factor;
+  captionCanvas.width = Math.round(state.baseCanvasWidth * factor);
+  captionCanvas.height = Math.round(state.baseCanvasHeight * factor);
   if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
   renderCaptions();
 }
 
+/**
+ * Match the preview to the source video's shape.
+ *
+ * The preview used to be locked to 9:16 while the export used the video's own
+ * dimensions, so anything that was not vertical previewed differently from the
+ * file it produced. The caption design space keeps 1080 on the frame's shorter
+ * side, which is also what the renderer scales by.
+ */
+function applyVideoAspect() {
+  const fromMedia = state.media && state.media.video;
+  const measured = videoPlayer.videoWidth && videoPlayer.videoHeight
+    ? videoPlayer.videoWidth / videoPlayer.videoHeight
+    : null;
+  const aspect = (fromMedia && fromMedia.aspectRatio) || measured || 9 / 16;
+
+  state.videoAspect = aspect;
+
+  const container = $('videoContainer');
+  if (container) container.style.aspectRatio = String(aspect);
+
+  if (aspect >= 1) {
+    state.baseCanvasHeight = 1080;
+    state.baseCanvasWidth = Math.round(1080 * aspect);
+  } else {
+    state.baseCanvasWidth = 1080;
+    state.baseCanvasHeight = Math.round(1080 / aspect);
+  }
+
+  applyLowResMode();
+  updateSafeZones();
+}
+
+/**
+ * Outline the areas each platform covers with its own interface, so captions
+ * are not placed underneath a like button or a caption overlay.
+ */
+function updateSafeZones() {
+  const host = $('safeZones');
+  if (!host) return;
+  host.classList.toggle('hidden', !state.safeZonesVisible);
+  // Vertical formats are the ones with heavy interface overlays; on wider
+  // formats only a modest bottom margin is worth reserving.
+  host.classList.toggle('vertical', state.videoAspect < 0.9);
+}
+
 if ($('lowResToggle')) $('lowResToggle').addEventListener('change', applyLowResMode);
 applyLowResMode();
+
+if ($('safeZoneBtn')) {
+  $('safeZoneBtn').addEventListener('click', () => {
+    state.safeZonesVisible = !state.safeZonesVisible;
+    $('safeZoneBtn').classList.toggle('active', state.safeZonesVisible);
+    $('safeZoneBtn').setAttribute('aria-pressed', String(state.safeZonesVisible));
+    updateSafeZones();
+  });
+}
 
 // â”€â”€â”€ Export: MP4 (Server-side frame-by-frame) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

@@ -152,6 +152,13 @@
             <div class="video-container" id="videoContainer">
               <video id="videoPlayer" playsinline></video>
               <canvas id="captionCanvas" width="1080" height="1920"></canvas>
+              <!-- Regions covered by platform interface, so captions are not
+                   placed underneath a like button or the platform's own caption. -->
+              <div id="safeZones" class="safe-zones hidden" aria-hidden="true">
+                <div class="safe-zone safe-zone-top"><span>Top bar</span></div>
+                <div class="safe-zone safe-zone-right"><span>Actions</span></div>
+                <div class="safe-zone safe-zone-bottom"><span>Caption &amp; audio</span></div>
+              </div>
               <div id="canvasSelectOutline" class="canvas-select-outline hidden">
                 <div class="handle top-left"></div>
                 <div class="handle top-right"></div>
@@ -160,11 +167,13 @@
               </div>
             </div>
             <div class="video-controls">
-              <button class="ctrl-btn" id="playPauseBtn" title="Play/Pause">
+              <button class="ctrl-btn" id="playPauseBtn" title="Play / pause (Space)" aria-label="Play or pause">
                 <svg id="playIcon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <svg id="pauseIcon" class="hidden" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
               </button>
               <span class="time-display" id="timeDisplay">00:00:00 / 00:00:00</span>
+              <span class="video-meta" id="videoMeta"></span>
+              <button class="ctrl-toggle" id="safeZoneBtn" title="Show the areas platform interface covers" aria-pressed="false">Safe zones</button>
             </div>
           </div>
 
@@ -448,13 +457,26 @@
               <button class="zoom-btn" id="zoomInBtn">+</button>
             </div>
           </div>
-          <div class="timeline-viewport" id="timelineViewport">
-            <div class="timeline-content" id="timelineContent">
-              <div class="time-ruler" id="timeRuler"></div>
-              <div class="timeline-track" id="wordTrack"></div>
-              <div class="timeline-playhead" id="timelinePlayhead">
-                <div class="playhead-head"></div>
-                <div class="playhead-line"></div>
+          <div class="timeline-body">
+            <div class="track-gutter">
+              <span class="track-name">Words</span>
+              <span class="track-name">Video</span>
+              <span class="track-name">Audio</span>
+            </div>
+            <div class="timeline-viewport" id="timelineViewport">
+              <div class="timeline-content" id="timelineContent">
+                <div class="time-ruler" id="timeRuler"></div>
+                <div class="timeline-track" id="wordTrack"></div>
+                <div class="timeline-track timeline-track-film" id="videoTrack">
+                  <canvas id="filmstripCanvas"></canvas>
+                </div>
+                <div class="timeline-track timeline-track-audio" id="audioTrack">
+                  <canvas id="waveformCanvas"></canvas>
+                </div>
+                <div class="timeline-playhead" id="timelinePlayhead">
+                  <div class="playhead-head"></div>
+                  <div class="playhead-line"></div>
+                </div>
               </div>
             </div>
           </div>

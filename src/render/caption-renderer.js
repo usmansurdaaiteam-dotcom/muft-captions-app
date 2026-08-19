@@ -444,10 +444,16 @@ function wrapWords(ctx, words, template, fontSize, maxWidth, maxLines, scale) {
  * Cached, because export re-renders the same composition for every frame it
  * spans and re-measuring text thousands of times is the main cost.
  */
-function layoutComposition(ctx, comp, tokenMap, template, scale) {
-  const key = `${comp.id}:${layoutSignature(template)}:${Math.round(scale * 1000)}:${(comp.token_ids || []).join(',')}:${comp.hero_token_id}:${comp.comp_type}`;
+function layoutComposition(ctx, comp, tokenMap, template, width, height) {
+  const key = `${comp.id}:${layoutSignature(template)}:${Math.round(width)}x${Math.round(height)}:${(comp.token_ids || []).join(',')}:${comp.hero_token_id}:${comp.comp_type}`;
   const cached = cacheGet(key);
   if (cached) return cached;
+
+  // Sizes scale with the frame's shorter side rather than its width. Scaling by
+  // width alone made text roughly three times larger relative to the frame on
+  // landscape video than on vertical, and put the vertical anchor outside the
+  // frame entirely, because the design canvas is 1080x1920.
+  const scale = Math.min(width, height) / DESIGN_WIDTH;
 
   const words = displayWords(comp, tokenMap, template);
   if (!words.length) return cacheSet(key, { words: [], lines: [] });
@@ -458,12 +464,14 @@ function layoutComposition(ctx, comp, tokenMap, template, scale) {
   const compType = comp.comp_type || 'emphasis';
 
   const baseSize = (font.size || 72) * scale;
-  const maxWidth = DESIGN_WIDTH * scale * (layout.maxWidthPct === undefined ? 0.86 : layout.maxWidthPct);
+  // Horizontal extents follow the frame's width and the vertical anchor follows
+  // its height, so a template lands in the same relative place at any aspect.
+  const maxWidth = width * (layout.maxWidthPct === undefined ? 0.86 : layout.maxWidthPct);
   const maxLines = layout.maxLines === undefined ? 2 : layout.maxLines;
   const lineHeight = layout.lineHeight || font.lineHeight || 1.15;
 
-  const centerX = DESIGN_WIDTH * scale * (layout.x === undefined ? 0.5 : layout.x);
-  const centerY = DESIGN_HEIGHT * scale * (layout.y === undefined ? 0.72 : layout.y);
+  const centerX = width * (layout.x === undefined ? 0.5 : layout.x);
+  const centerY = height * (layout.y === undefined ? 0.72 : layout.y);
 
   // Spotlight compositions collapse to the hero word alone, whatever the mode.
   const effectiveWords = compType === 'spotlight'
@@ -855,8 +863,8 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, template
   const comp = findActiveComposition(compositions, timeMs);
   if (!comp || !template) return false;
 
-  const scale = width / DESIGN_WIDTH;
-  const laid = layoutComposition(ctx, comp, tokenMap, template, scale);
+  const scale = Math.min(width, height) / DESIGN_WIDTH;
+  const laid = layoutComposition(ctx, comp, tokenMap, template, width, height);
   if (!laid.words.length) return false;
 
   drawLineBackgrounds(ctx, laid, template, scale);
@@ -931,12 +939,11 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, template
  * from the renderer's own layout instead of reimplementing the layout maths —
  * a second copy would drift from what is actually drawn.
  */
-export function getCaptionBounds(ctx, timeMs, compositions, tokenMap, template, width) {
+export function getCaptionBounds(ctx, timeMs, compositions, tokenMap, template, width, height) {
   const comp = findActiveComposition(compositions, timeMs);
   if (!comp || !template) return null;
 
-  const scale = width / DESIGN_WIDTH;
-  const laid = layoutComposition(ctx, comp, tokenMap, template, scale);
+  const laid = layoutComposition(ctx, comp, tokenMap, template, width, height);
   if (!laid.words.length) return null;
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
