@@ -23,15 +23,33 @@ down to static weights. See [Fonts](#fonts) for why.
 Everything has a working default, so the app runs with no configuration. Set any
 of these as environment variables to override.
 
+Credentials live in a **`.env` file** in the project root, which is gitignored and
+loaded automatically at startup. Copy `.env.example` to `.env` and fill it in.
+
+They used to be literals in `server.js`, which meant every rotation was a code
+edit and a commit, and the values were readable by anyone with repository access.
+
+```bash
+cp .env.example .env
+# fill it in, then:
+npm run credentials:check
+```
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP port |
 | `ACCESS_PASSWORD` | `muftcaptions2026` | The shared password for the team |
 | `REQUIRE_PASSWORD` | `true` | Set to `false` to remove the password gate entirely. Only do this when the app is not reachable from the internet. |
-| `SONIOX_API_KEY` | inline value | Speech-to-text key |
+| `SONIOX_API_KEY` | *(required)* | Speech-to-text key |
 | `GEMINI_API_BASE` | Google's API | Point at a Gemini-compatible proxy instead — see below |
-| `GEMINI_API_KEY` | *(unset)* | Strongly recommended — see below |
+| `GEMINI_API_KEY` | *(unset)* | Key for whichever backend `GEMINI_API_BASE` names |
 | `GEMINI_API_MODEL` | `gemini-3.5-flash` | Model used for caption composition |
+| `GEMINI_COOKIES` | *(unset)* | Fallback: a Cookie header from a signed-in gemini.google.com tab |
+| `GEMINI_SAPISID` | read from cookies | Only needed if the cookie string lacks SAPISID |
+
+`npm run credentials:check` verifies each of these against the live services and
+tells you what to fix. Run it whenever captions get worse for no obvious reason —
+an expired Google session degrades output silently rather than failing.
 
 ## Caption composition
 
@@ -66,15 +84,26 @@ your instance with `npm run gemini:doctor`.
 Get a key from [Google AI Studio](https://aistudio.google.com/apikey), set
 `GEMINI_API_KEY`, and leave `GEMINI_API_BASE` unset.
 
-### Why configuring one matters
+### Option 3: a gemini.google.com session
 
-With neither set, the app falls back to a hand-rolled client that talks to
-`gemini.google.com` using hardcoded Google **session cookies**. Those cookies
-expire on their own after a few weeks. When they do, composition does not error —
-it quietly degrades: lines are grouped by pauses alone, the emphasised word
-becomes simply the longest word in the line, and Urdu stays in Urdu script. The
-editor shows a warning when this happens, and the server says so at startup, but
-the real fix is to configure a backend.
+Free and needs no setup beyond pasting a Cookie header into `GEMINI_COOKIES`, but
+it is not a supported interface and the session expires on its own after a few
+weeks. When it does, composition does not error — it quietly degrades: lines are
+grouped by pauses alone, the emphasised word becomes simply the longest word in
+the line, and non-Latin script stays unconverted. The editor warns when this
+happens and the server says so at startup.
+
+Two things make this less fragile than the original implementation. The session is
+read from the environment rather than hardcoded, so refreshing it is not a code
+change. And the `bl` build identifier is discovered from the live page instead of
+being pinned — the pinned value in the original code was from 2026-05-25 and had
+drifted almost three months behind the deployed build.
+
+If you already have a working browser session and want to use it with
+AIStudioToAPI rather than here, `npm run cookies:to-aistudio` converts a Cookie
+header into the `configs/auth/auth-1.json` file that project stores. Google may
+still challenge a session presented from a different machine, in which case use
+its supported `npm run setup-auth` flow.
 
 ### Choosing a model
 
