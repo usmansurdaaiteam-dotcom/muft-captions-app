@@ -1791,13 +1791,17 @@ function renderTimeline() {
         const initialEndMs = token.end_ms;
         const durationMs = initialEndMs - initialStartMs;
         
-        // Find neighbors in state.tokens
-        const tokenIdx = state.tokens.findIndex(t => t.id === token.id);
-        const prevToken = tokenIdx > 0 ? state.tokens[tokenIdx - 1] : null;
-        const nextToken = tokenIdx < state.tokens.length - 1 ? state.tokens[tokenIdx + 1] : null;
-        
-        const minStartMs = prevToken ? prevToken.end_ms : 0;
-        const maxEndMs = nextToken ? nextToken.start_ms : (state.videoDuration * 1000);
+        // Neighbours are whichever words sit next to this one on the timeline.
+        // Using array position instead would clamp against the wrong words once
+        // the token list is no longer in chronological order, letting a dragged
+        // word overlap the word actually beside it.
+        let minStartMs = 0;
+        let maxEndMs = state.videoDuration * 1000 || initialEndMs;
+        for (const other of state.tokens) {
+          if (other.id === token.id) continue;
+          if (other.end_ms <= initialStartMs) minStartMs = Math.max(minStartMs, other.end_ms);
+          if (other.start_ms >= initialEndMs) maxEndMs = Math.min(maxEndMs, other.start_ms);
+        }
         
         function onMouseMove(moveEvent) {
           block.dataset.dragged = 'true';
