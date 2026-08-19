@@ -24,6 +24,31 @@ window.fetch = async function (url, options = {}) {
   return response;
 };
 
+/** Transient message in the corner. Used instead of alert() for non-blocking news. */
+function showNotice(message, kind = 'info', durationMs = 9000) {
+  let host = document.getElementById('noticeStack');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'noticeStack';
+    host.className = 'notice-stack';
+    document.body.appendChild(host);
+  }
+
+  const notice = document.createElement('div');
+  notice.className = `notice notice-${kind}`;
+  notice.textContent = message;
+
+  const dismiss = document.createElement('button');
+  dismiss.className = 'notice-close';
+  dismiss.setAttribute('aria-label', 'Dismiss');
+  dismiss.textContent = '\u00D7';
+  dismiss.addEventListener('click', () => notice.remove());
+  notice.appendChild(dismiss);
+
+  host.appendChild(notice);
+  setTimeout(() => notice.remove(), durationMs);
+}
+
 function showPasswordPrompt() {
   const overlay = document.getElementById('passwordOverlay');
   if (overlay) {
@@ -100,24 +125,30 @@ const state = {
   redoStack: [],
   baseCanvasWidth: 1080,
   baseCanvasHeight: 1920,
-  // Template (loaded from JSON)
+  // Which template this project uses, plus the user's tweaks on top of it.
+  // `template` is always derived from these two and never edited directly, so
+  // it can be rebuilt from a project file at any time.
+  templateId: 'muft-default',
+  styleOverrides: {},
   template: null,
-  templateId: 'kalakar-glow',
-  // Animation config (separate from template)
-  animation: {
-    type: 'pop_bounce',
-    scaleFrom: 0.82,
-    scalePeak: 1.15,
-    durationMs: 220,
-    peakAtMs: 130
-  },
+  templateList: [],
+  templateCategory: 'All',
+  templateQuery: '',
   // Export
   exporting: false,
-  exportCancelled: false,
+  exportJobId: null,
   // Selected tokens for multi-select
   selectedTokenIds: [],
   userHoveringCaptions: false
 };
+
+/** Rebuild the resolved template from the template id plus overrides. */
+function refreshTemplate() {
+  if (!window.CaptionTemplates || !window.applyStyleOverrides) return;
+  const base = window.CaptionTemplates.getTemplate(state.templateId);
+  state.template = window.applyStyleOverrides(base, state.styleOverrides);
+  if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
+}
 
 // â”€â”€â”€ Project Database & Autosave API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -128,10 +159,11 @@ async function saveProjectState() {
       id: state.projectId,
       title: state.filename,
       videoUrl: state.videoUrl,
-      createdAt: Date.now(),
+      createdAt: state.createdAt || Date.now(),
       tokens: state.tokens,
       compositions: state.compositions,
-      template: state.template
+      templateId: state.templateId,
+      styleOverrides: state.styleOverrides
     };
     await fetch(`/api/projects/${state.projectId}`, {
       method: 'POST',
@@ -155,8 +187,33 @@ function updateUndoRedoButtons() {
   if (redoBtn) redoBtn.disabled = state.redoStack.length === 0;
 }
 
+function snapshotState() {
+  return JSON.stringify({
+    tokens: state.tokens,
+    compositions: state.compositions,
+    templateId: state.templateId,
+    styleOverrides: state.styleOverrides
+  });
+}
+
+function restoreSnapshot(json) {
+  const snapshot = JSON.parse(json);
+  state.tokens = snapshot.tokens;
+  state.compositions = snapshot.compositions;
+  state.templateId = snapshot.templateId || state.templateId;
+  state.styleOverrides = snapshot.styleOverrides || {};
+  refreshTemplate();
+  renderCaptionList();
+  renderTimeline();
+  renderCaptions();
+  syncStyleInspector();
+  renderTemplateGallery();
+  updateUndoRedoButtons();
+  saveProjectState();
+}
+
 function pushUndoState() {
-  if (!state.template) return;
+  if (!state.projectId) return;
   const now = Date.now();
   if (now - lastPushTime < 300) return;
   lastPushTime = now;
@@ -164,187 +221,184 @@ function pushUndoState() {
   if (state.undoStack.length >= 50) {
     state.undoStack.shift();
   }
-  state.undoStack.push(JSON.stringify({
-    tokens: state.tokens,
-    compositions: state.compositions,
-    template: state.template
-  }));
+  state.undoStack.push(snapshotState());
   state.redoStack = []; // Clear redo stack on new action
+  updateUndoRedoButtons();
 }
 
-function updateStyleProperty(updater) {
-  if (!state.template) return;
-
-  const applyToAll = $('applyToAllToggle') ? $('applyToAllToggle').checked : true;
-  
-  if (applyToAll) {
-    // Apply globally
-    updater(state.template);
-    
-    // Clear overrides on the active composition if any
-    const ms = state.currentTime * 1000;
-    const comp = state.compositions.find(c => ms >= c.start_ms && ms <= c.end_ms);
-    if (comp) {
-      delete comp.override_hero_size;
-      delete comp.override_support_size;
-      delete comp.override_hero_color;
-      delete comp.override_support_color;
-      delete comp.override_font_family;
-      delete comp.override_center_x;
-      delete comp.override_center_y;
-    }
+/**
+ * Record a style tweak for this project and re-render.
+ *
+ * Tweaks are stored as overrides rather than by mutating the template, so the
+ * template stays the shared, immutable definition and the project remembers
+ * only what the user actually changed. Passing null clears an override and
+ * restores the template's own value.
+ */
+function setStyleOverride(key, value) {
+  if (value === null || value === undefined) {
+    delete state.styleOverrides[key];
   } else {
-    // Apply only to the active composition
-    const ms = state.currentTime * 1000;
-    const comp = state.compositions.find(c => ms >= c.start_ms && ms <= c.end_ms);
-    if (comp) {
-      const mockTemplate = {
-        hero: {
-          fontSize: comp.override_hero_size !== undefined ? comp.override_hero_size : state.template.hero.fontSize,
-          color: comp.override_hero_color !== undefined ? comp.override_hero_color : state.template.hero.color,
-          fontFamily: comp.override_font_family !== undefined ? comp.override_font_family : state.template.hero.fontFamily,
-          uppercase: state.template.hero.uppercase,
-          letterSpacing: state.template.hero.letterSpacing,
-          stroke: state.template.hero.stroke
-        },
-        support: {
-          fontSize: comp.override_support_size !== undefined ? comp.override_support_size : state.template.support.fontSize,
-          color: comp.override_support_color !== undefined ? comp.override_support_color : state.template.support.color,
-          fontFamily: comp.override_font_family !== undefined ? comp.override_font_family : state.template.support.fontFamily,
-          uppercase: state.template.support.uppercase,
-          letterSpacing: state.template.support.letterSpacing,
-          stroke: state.template.support.stroke
-        },
-        layout: {
-          captionCenterX: comp.override_center_x !== undefined ? comp.override_center_x : state.template.layout.captionCenterX,
-          captionCenterY: comp.override_center_y !== undefined ? comp.override_center_y : state.template.layout.captionCenterY
-        }
-      };
-
-      updater(mockTemplate);
-
-      // Save overrides back to comp
-      comp.override_hero_size = mockTemplate.hero.fontSize;
-      comp.override_support_size = mockTemplate.support.fontSize;
-      comp.override_hero_color = mockTemplate.hero.color;
-      comp.override_support_color = mockTemplate.support.color;
-      comp.override_font_family = mockTemplate.hero.fontFamily;
-      comp.override_center_x = mockTemplate.layout.captionCenterX;
-      comp.override_center_y = mockTemplate.layout.captionCenterY;
-    }
+    state.styleOverrides[key] = value;
   }
-
+  refreshTemplate();
   renderCaptions();
 }
 
-function syncStyleInspectorToActive() {
-  if (!state.template) return;
-  const ms = state.currentTime * 1000;
-  const comp = state.compositions.find(c => ms >= c.start_ms && ms <= c.end_ms);
-  if (!comp) return;
+function setStyleOverrides(patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === undefined) delete state.styleOverrides[key];
+    else state.styleOverrides[key] = value;
+  }
+  refreshTemplate();
+  renderCaptions();
+}
 
-  const effective = TemplateEngine.getEffectiveTemplate(state.template, comp);
-  
-  if ($('heroSizeSlider')) {
-    $('heroSizeSlider').value = effective.hero.fontSize;
-    $('heroSizeVal').textContent = effective.hero.fontSize;
-  }
-  if ($('supportSizeSlider')) {
-    $('supportSizeSlider').value = effective.support.fontSize;
-    $('supportSizeVal').textContent = effective.support.fontSize;
-  }
-  if ($('heroColorPicker')) $('heroColorPicker').value = effective.hero.color;
-  if ($('supportColorPicker')) $('supportColorPicker').value = effective.support.color;
-  if ($('fontSelect')) {
-    const match = Array.from($('fontSelect').options).find(opt => opt.value.includes(effective.hero.fontFamily));
-    if (match) $('fontSelect').value = match.value;
-  }
+/** First editable colour of a fill, whether solid, gradient or depth. */
+function fillColorOf(style, fallback) {
+  const fill = style && style.fill;
+  if (!fill) return fallback;
+  if (fill.color) return fill.color;
+  if (Array.isArray(fill.stops) && fill.stops.length) return fill.stops[0].color;
+  return fallback;
+}
+
+function setControl(id, value) {
+  const el = $(id);
+  if (el && value !== undefined && value !== null) el.value = value;
+}
+
+function setOutput(id, value) {
+  const el = $(id);
+  if (el) el.textContent = value;
+}
+
+function setColorControl(id, hexId, value) {
+  const el = $(id);
+  if (!el || !value) return;
+  // <input type="color"> only accepts #rrggbb, so rgba()/short hex is skipped.
+  if (/^#[0-9a-f]{6}$/i.test(value)) el.value = value;
+  setOutput(hexId, value);
+}
+
+/** Push the resolved template's current values into the inspector controls. */
+function syncStyleInspector() {
+  const t = state.template;
+  if (!t) return;
+
+  setControl('soFontFamily', t.font.family);
+  populateWeightOptions(t.font.family, t.font.weight);
+  setControl('soFontSize', t.font.size);
+  setOutput('soFontSizeVal', Math.round(t.font.size));
+  setControl('soCasing', t.font.casing);
+  setControl('soLetterSpacing', t.font.letterSpacing);
+  setOutput('soLetterSpacingVal', t.font.letterSpacing);
+  setControl('soLineHeight', t.font.lineHeight);
+  setOutput('soLineHeightVal', Number(t.font.lineHeight).toFixed(2));
+
+  setControl('soY', Math.round(t.layout.y * 100));
+  setOutput('soYVal', Math.round(t.layout.y * 100));
+  setControl('soX', Math.round(t.layout.x * 100));
+  setOutput('soXVal', Math.round(t.layout.x * 100));
+  setControl('soMaxWidth', Math.round(t.layout.maxWidthPct * 100));
+  setOutput('soMaxWidthVal', Math.round(t.layout.maxWidthPct * 100));
+  setControl('soMaxLines', String(t.layout.maxLines));
+  setControl('soAlign', t.layout.align);
+  setControl('soReveal', t.layout.reveal);
+
+  setColorControl('soBaseColor', 'soBaseColorHex', fillColorOf(t.word, '#FFFFFF'));
+  setColorControl('soActiveColor', 'soActiveColorHex', fillColorOf(t.active, '#00FFB2'));
+
+  const stroke = t.word.stroke;
+  if ($('soStrokeEnabled')) $('soStrokeEnabled').checked = !!(stroke && stroke.width > 0);
+  setControl('soStrokeWidth', stroke ? stroke.width : 0);
+  setOutput('soStrokeWidthVal', stroke ? stroke.width : 0);
+  setColorControl('soStrokeColor', 'soStrokeColorHex', (stroke && stroke.color) || '#000000');
+
+  const shadow = t.word.shadow;
+  if ($('soShadowEnabled')) $('soShadowEnabled').checked = !!shadow;
+  setControl('soShadowBlur', shadow ? shadow.blur : 0);
+  setOutput('soShadowBlurVal', shadow ? shadow.blur : 0);
+
+  const glow = t.active.glow;
+  if ($('soGlowEnabled')) $('soGlowEnabled').checked = !!glow;
+  setColorControl('soGlowColor', 'soGlowColorHex', (glow && glow.color) || '#00FFB2');
+
+  setControl('soAnimationType', t.animation.type);
+  setControl('soAnimationTarget', t.animation.target);
+  setControl('soAnimationDuration', t.animation.durationMs);
+  setOutput('soAnimationDurationVal', t.animation.durationMs);
+
+  const pop = t.active.pop;
+  if ($('soPopEnabled')) $('soPopEnabled').checked = !!pop;
+  setControl('soPopScale', pop ? pop.scale : 1.16);
+  setOutput('soPopScaleVal', (pop ? pop.scale : 1.16).toFixed(2));
+
+  setControl('soHeroSizeScale', t.heroSizeScale);
+  setOutput('soHeroSizeScaleVal', Number(t.heroSizeScale).toFixed(2));
+
+  // Hero sizing only means anything for hero-layout templates.
+  const heroControls = $('heroControls');
+  if (heroControls) heroControls.classList.toggle('hidden', t.mode !== 'hero');
+}
+
+/** Fill the font family list from the installed registry. */
+function populateFontOptions() {
+  const select = $('soFontFamily');
+  if (!select || !window.CaptionFonts) return;
+  const families = window.CaptionFonts.listFamilies();
+  select.innerHTML = families
+    .map(f => `<option value="${f.family}">${f.family}</option>`)
+    .join('');
+}
+
+/** Only offer weights that actually exist as a font file for this family. */
+function populateWeightOptions(family, selected) {
+  const select = $('soFontWeight');
+  if (!select || !window.CaptionFonts) return;
+  const entry = window.CaptionFonts.listFamilies().find(f => f.family === family);
+  const weights = entry ? entry.weights : [400];
+  const labels = {
+    100: 'Thin', 200: 'ExtraLight', 300: 'Light', 400: 'Regular',
+    500: 'Medium', 600: 'SemiBold', 700: 'Bold', 800: 'ExtraBold', 900: 'Black'
+  };
+  select.innerHTML = weights
+    .map(w => `<option value="${w}">${labels[w] || w}</option>`)
+    .join('');
+  const resolved = weights.includes(Number(selected)) ? Number(selected) : weights[0];
+  select.value = String(resolved);
+  select.disabled = weights.length <= 1;
+}
+
+function undo() {
+  if (!state.undoStack.length) return;
+  state.redoStack.push(snapshotState());
+  restoreSnapshot(state.undoStack.pop());
+}
+
+function redo() {
+  if (!state.redoStack.length) return;
+  state.undoStack.push(snapshotState());
+  restoreSnapshot(state.redoStack.pop());
 }
 
 window.addEventListener('keydown', e => {
   const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
-  const isEditingText = activeTag === 'input' || activeTag === 'textarea' || (document.activeElement && document.activeElement.contentEditable === 'true');
-  
-  if (e.ctrlKey && !e.altKey) {
-    if (e.key.toLowerCase() === 'z') {
-      if (isEditingText) return; // Let default browser undo run for text fields
-      e.preventDefault();
-      
-      if (state.undoStack.length > 0) {
-        state.redoStack.push(JSON.stringify({
-          tokens: state.tokens,
-          compositions: state.compositions,
-          template: state.template
-        }));
-        
-        const popped = JSON.parse(state.undoStack.pop());
-        state.tokens = popped.tokens;
-        state.compositions = popped.compositions;
-        state.template = popped.template;
-        
-        // Sync style inspector UI elements
-        if (state.template) {
-          if ($('heroSizeSlider')) {
-            $('heroSizeSlider').value = state.template.hero.fontSize;
-            $('heroSizeVal').textContent = state.template.hero.fontSize;
-          }
-          if ($('supportSizeSlider')) {
-            $('supportSizeSlider').value = state.template.support.fontSize;
-            $('supportSizeVal').textContent = state.template.support.fontSize;
-          }
-          if ($('heroColorPicker')) $('heroColorPicker').value = state.template.hero.color;
-          if ($('supportColorPicker')) $('supportColorPicker').value = state.template.support.color;
-          if ($('fontSelect')) {
-            const match = Array.from($('fontSelect').options).find(opt => opt.value.includes(state.template.hero.fontFamily));
-            if (match) $('fontSelect').value = match.value;
-          }
-        }
-        
-        saveProjectState();
-        renderCaptionList();
-        renderTimeline();
-        renderCaptions();
-      }
-    } else if (e.key.toLowerCase() === 'y') {
-      if (isEditingText) return;
-      e.preventDefault();
-      
-      if (state.redoStack.length > 0) {
-        state.undoStack.push(JSON.stringify({
-          tokens: state.tokens,
-          compositions: state.compositions,
-          template: state.template
-        }));
-        
-        const popped = JSON.parse(state.redoStack.pop());
-        state.tokens = popped.tokens;
-        state.compositions = popped.compositions;
-        state.template = popped.template;
-        
-        // Sync style inspector UI elements
-        if (state.template) {
-          if ($('heroSizeSlider')) {
-            $('heroSizeSlider').value = state.template.hero.fontSize;
-            $('heroSizeVal').textContent = state.template.hero.fontSize;
-          }
-          if ($('supportSizeSlider')) {
-            $('supportSizeSlider').value = state.template.support.fontSize;
-            $('supportSizeVal').textContent = state.template.support.fontSize;
-          }
-          if ($('heroColorPicker')) $('heroColorPicker').value = state.template.hero.color;
-          if ($('supportColorPicker')) $('supportColorPicker').value = state.template.support.color;
-          if ($('fontSelect')) {
-            const match = Array.from($('fontSelect').options).find(opt => opt.value.includes(state.template.hero.fontFamily));
-            if (match) $('fontSelect').value = match.value;
-          }
-        }
-        
-        saveProjectState();
-        renderCaptionList();
-        renderTimeline();
-        renderCaptions();
-      }
-    }
+  const isEditingText = activeTag === 'input' || activeTag === 'textarea'
+    || (document.activeElement && document.activeElement.contentEditable === 'true');
+
+  if (!e.ctrlKey && !e.metaKey) return;
+  if (e.altKey) return;
+
+  const key = e.key.toLowerCase();
+  if (key === 'z') {
+    if (isEditingText) return; // Let the browser's own text undo run.
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+  } else if (key === 'y') {
+    if (isEditingText) return;
+    e.preventDefault();
+    redo();
   }
 });
 
@@ -443,61 +497,143 @@ async function loadProject(projectId) {
     if (!res.ok) throw new Error('Failed to load project details');
     const data = await res.json();
     
-    state.projectId = data.id;
-    state.tokens = data.tokens;
-    state.compositions = data.compositions;
-    state.videoUrl = data.videoUrl;
-    state.filename = data.title;
-    state.template = data.template;
-    
-    state.undoStack = [];
-    state.redoStack = [];
-    updateUndoRedoButtons();
-    
-    if (state.template) {
-      if ($('heroColorPicker')) {
-        $('heroColorPicker').value = state.template.hero.color;
-        $('heroColorHex').textContent = state.template.hero.color;
-      }
-      if ($('supportColorPicker')) {
-        $('supportColorPicker').value = state.template.support.color;
-        $('supportColorHex').textContent = state.template.support.color;
-      }
-      if ($('heroSizeSlider')) {
-        $('heroSizeSlider').value = state.template.hero.fontSize;
-        $('heroSizeVal').textContent = state.template.hero.fontSize;
-      }
-      if ($('supportSizeSlider')) {
-        $('supportSizeSlider').value = state.template.support.fontSize;
-        $('supportSizeVal').textContent = state.template.support.fontSize;
-      }
-      if ($('fontSelect')) {
-        for (const opt of $('fontSelect').options) {
-          if (opt.value.includes(state.template.hero.fontFamily)) {
-            opt.selected = true;
-            break;
-          }
-        }
-      }
-    }
-    
+    applyProjectData(data);
     showEditor();
   } catch (err) {
     alert('Failed to load project: ' + err.message);
   }
 }
 
-// Load default template immediately
-async function loadTemplate(templateId) {
-  const res = await fetch(`/templates/${templateId}.json`);
-  if (!res.ok) throw new Error(`Failed to load template: ${templateId}`);
-  state.template = await res.json();
-  state.templateId = templateId;
-  console.log(`[Template] Loaded: ${state.template.name}`);
-  return state.template;
+/** Load a project payload (from open or from a fresh upload) into state. */
+function applyProjectData(data) {
+  state.projectId = data.id || data.projectId;
+  state.tokens = data.tokens || [];
+  state.compositions = data.compositions || [];
+  state.videoUrl = data.videoUrl;
+  state.filename = data.title || data.filename || 'Untitled';
+  state.createdAt = data.createdAt || Date.now();
+  state.templateId = data.templateId || state.templateId;
+  state.styleOverrides = data.styleOverrides || {};
+
+  state.undoStack = [];
+  state.redoStack = [];
+  updateUndoRedoButtons();
+
+  refreshTemplate();
+  syncStyleInspector();
+  renderTemplateGallery();
 }
 
-loadTemplate('kalakar-glow').catch(err => console.error('Template load failed:', err));
+// ─── Template gallery ─────────────────────────────────────────────────────────
+
+async function loadTemplateList() {
+  try {
+    const res = await fetch('/api/templates');
+    if (!res.ok) throw new Error('Failed to load templates');
+    const data = await res.json();
+    state.templateList = data.templates || [];
+    renderTemplateCategories();
+    renderTemplateGallery();
+  } catch (err) {
+    console.error('[Templates] Could not load list:', err);
+  }
+}
+
+function renderTemplateCategories() {
+  const host = $('templateCategories');
+  if (!host) return;
+  const categories = ['All', ...new Set(state.templateList.map(t => t.category))];
+  host.innerHTML = '';
+  for (const category of categories) {
+    const btn = document.createElement('button');
+    btn.className = 'category-chip' + (category === state.templateCategory ? ' active' : '');
+    btn.textContent = category;
+    btn.addEventListener('click', () => {
+      state.templateCategory = category;
+      renderTemplateCategories();
+      renderTemplateGallery();
+    });
+    host.appendChild(btn);
+  }
+}
+
+function renderTemplateGallery() {
+  const host = $('templateGallery');
+  if (!host) return;
+
+  const query = state.templateQuery.trim().toLowerCase();
+  const visible = state.templateList.filter(t => {
+    const matchesCategory = state.templateCategory === 'All' || t.category === state.templateCategory;
+    const matchesQuery = !query
+      || t.name.toLowerCase().includes(query)
+      || t.category.toLowerCase().includes(query);
+    return matchesCategory && matchesQuery;
+  });
+
+  host.innerHTML = '';
+  if (!visible.length) {
+    host.innerHTML = '<div class="gallery-empty">No templates match that search.</div>';
+    return;
+  }
+
+  for (const template of visible) {
+    const card = document.createElement('button');
+    card.className = 'template-card' + (template.id === state.templateId ? ' active' : '');
+    card.title = `${template.name} — ${template.category}`;
+
+    // The swatch previews the template's own font and highlight colour so the
+    // list is scannable without rendering 35 live canvases.
+    const alias = window.CaptionFonts
+      ? window.CaptionFonts.aliasFor(
+          window.CaptionFonts.resolveFont(template.previewFontFamily, template.previewFontWeight).family,
+          window.CaptionFonts.resolveFont(template.previewFontFamily, template.previewFontWeight).weight
+        )
+      : 'inherit';
+
+    const sample = template.previewCasing === 'upper' ? 'AA BB' : 'Aa Bb';
+    const parts = sample.split(' ');
+
+    const swatch = document.createElement('span');
+    swatch.className = 'template-swatch';
+    swatch.style.fontFamily = `"${alias}", sans-serif`;
+    swatch.innerHTML =
+      `<span style="color:${template.previewBaseColor}">${parts[0]}</span> ` +
+      `<span style="color:${template.previewActiveColor}">${parts[1]}</span>`;
+
+    const label = document.createElement('span');
+    label.className = 'template-card-name';
+    label.textContent = template.name;
+
+    if (template.mode === 'hero') {
+      const badge = document.createElement('span');
+      badge.className = 'template-mode-badge';
+      badge.textContent = 'HERO';
+      card.appendChild(badge);
+    }
+
+    card.appendChild(swatch);
+    card.appendChild(label);
+    card.addEventListener('click', () => selectTemplate(template.id));
+    host.appendChild(card);
+  }
+}
+
+/**
+ * Switch template. Style tweaks are cleared, because an override that made
+ * sense for one template (a huge font size for a condensed face, say) usually
+ * looks wrong on the next one and would hide what the new template really is.
+ */
+function selectTemplate(templateId) {
+  if (templateId === state.templateId) return;
+  pushUndoState();
+  state.templateId = templateId;
+  state.styleOverrides = {};
+  refreshTemplate();
+  renderTemplateGallery();
+  syncStyleInspector();
+  renderCaptions();
+  saveProjectState();
+}
 
 // â”€â”€â”€ DOM Refs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -592,15 +728,19 @@ uploadForm.addEventListener('submit', async e => {
 
     if (!response.ok) throw new Error(data.error || 'Pipeline failed.');
 
-    // Load state
-    state.projectId = data.projectId;
-    state.tokens = data.tokens;
-    state.compositions = data.compositions;
-    state.videoUrl = data.videoUrl;
-    state.filename = data.filename;
-
-    // Transition to editor
+    applyProjectData(data);
     showEditor();
+
+    // The fallback grouping picks the longest word as the emphasis and skips
+    // Roman-Urdu conversion, so say so instead of leaving the user wondering
+    // why the results look worse than usual.
+    if (data.compositionSource === 'fallback') {
+      showNotice(
+        'Captions were grouped without AI. Emphasis words are guessed and Urdu was not ' +
+        'converted to Roman Urdu. Set a GEMINI_API_KEY on the server to restore this.',
+        'warning'
+      );
+    }
 
   } catch (error) {
     clearInterval(progressInterval);
@@ -635,35 +775,43 @@ function showEditor() {
 
   topbarFilename.textContent = state.filename;
 
-  // Load video
-  const onMetadataLoaded = () => {
-    state.videoDuration = videoPlayer.duration;
-    updateTimeDisplay();
-    renderTimeline();
-  };
-  videoPlayer.addEventListener('loadedmetadata', onMetadataLoaded);
-  
   videoPlayer.src = state.videoUrl;
   videoPlayer.load();
 
-  // If already loaded / cached
+  // If the metadata is already available (cached video) the event will not fire.
   if (videoPlayer.duration) {
     state.videoDuration = videoPlayer.duration;
     updateTimeDisplay();
     renderTimeline();
   }
 
-  // Render caption list
   renderCaptionList();
-
-  // Start render loop for canvas overlay
-  requestAnimationFrame(renderLoop);
+  syncStyleInspector();
+  startRenderLoop();
 }
+
+// Registered once at load. Attaching this inside showEditor added another
+// listener every time a project was opened.
+videoPlayer.addEventListener('loadedmetadata', () => {
+  state.videoDuration = videoPlayer.duration;
+  updateTimeDisplay();
+  renderTimeline();
+});
 
 async function closeProject() {
   if (state.projectId) {
     await saveProjectState();
   }
+
+  stopRenderLoop();
+
+  if (state.isPlaying) {
+    videoPlayer.pause();
+    state.isPlaying = false;
+    if (playIcon) playIcon.classList.remove('hidden');
+    if (pauseIcon) pauseIcon.classList.add('hidden');
+  }
+
   state.projectId = null;
   state.tokens = [];
   state.compositions = [];
@@ -671,11 +819,16 @@ async function closeProject() {
   state.filename = '';
   state.videoDuration = 0;
   state.currentTime = 0;
+  state.activeCompositionId = null;
+  state.styleOverrides = {};
   state.undoStack = [];
   state.redoStack = [];
   updateUndoRedoButtons();
-  
-  videoPlayer.src = '';
+
+  videoPlayer.removeAttribute('src');
+  videoPlayer.load();
+  if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
+  if (topbarFilename) topbarFilename.textContent = '';
   
   document.body.classList.remove('project-loaded');
   document.body.classList.add('project-unloaded');
@@ -765,10 +918,7 @@ function renderCaptionList() {
           // Delete comp
           state.tokens = state.tokens.filter(t => !comp.token_ids.includes(t.id));
           state.compositions.splice(idx, 1);
-          saveProjectState();
-          renderCaptionList();
-          renderTimeline();
-          renderCaptions();
+          commitEdit();
           return;
         }
 
@@ -809,10 +959,7 @@ function renderCaptionList() {
         if (changed) {
           const freshTokenMap = new Map(state.tokens.map(t => [t.id, t]));
           updateCompTexts(comp, freshTokenMap);
-          saveProjectState();
-          renderCaptionList();
-          renderTimeline();
-          renderCaptions();
+          commitEdit();
         }
       });
 
@@ -863,10 +1010,7 @@ function renderCaptionList() {
             
             state.compositions.splice(idx + 1, 0, newComp);
             
-            saveProjectState();
-            renderCaptionList();
-            renderTimeline();
-            renderCaptions();
+            commitEdit();
           }
         }
       });
@@ -901,10 +1045,7 @@ function renderCaptionList() {
           if (sourceComp) {
             sourceComp.token_ids = sourceComp.token_ids.filter(id => id !== draggedTokenId);
             comp.token_ids.push(draggedTokenId);
-            saveProjectState();
-            renderCaptionList();
-            renderTimeline();
-            renderCaptions();
+            commitEdit();
           }
         }
       });
@@ -983,10 +1124,7 @@ function renderCaptionList() {
               comp.hero_token_id = comp.token_ids[0];
             }
             updateCompTexts(comp, tokenMap);
-            saveProjectState();
-            renderCaptionList();
-            renderTimeline();
-            renderCaptions();
+            commitEdit();
             return;
           }
 
@@ -994,10 +1132,7 @@ function renderCaptionList() {
             pushUndoState();
             token.text = newText;
             updateCompTexts(comp, tokenMap);
-            saveProjectState();
-            renderCaptionList();
-            renderTimeline();
-            renderCaptions();
+            commitEdit();
           } else {
             chip.textContent = token.text;
           }
@@ -1093,13 +1228,14 @@ function renderCaptionList() {
     // Layout button
     const layoutDiv = document.createElement('div');
     layoutDiv.className = 'caption-line-layout';
+    const compType = comp.comp_type || 'emphasis';
     const layoutBtn = document.createElement('button');
     layoutBtn.className = 'layout-btn';
-    layoutBtn.textContent = '\u229E';
-    layoutBtn.title = 'Change layout: ' + comp.layout_id;
+    layoutBtn.textContent = COMP_TYPE_ICONS[compType] || '\u229E';
+    layoutBtn.title = `Emphasis: ${COMP_TYPE_LABELS[compType]} (click to change)`;
     layoutBtn.addEventListener('click', e => {
       e.stopPropagation();
-      cycleLayout(comp.id);
+      cycleCompType(comp.id);
     });
     layoutDiv.appendChild(layoutBtn);
     const deleteBtn = document.createElement('button');
@@ -1111,10 +1247,7 @@ function renderCaptionList() {
       pushUndoState();
       state.tokens = state.tokens.filter(t => !comp.token_ids.includes(t.id));
       state.compositions.splice(idx, 1);
-      saveProjectState();
-      renderCaptionList();
-      renderTimeline();
-      renderCaptions();
+      commitEdit();
     });
     layoutDiv.appendChild(deleteBtn);
     line.appendChild(layoutDiv);
@@ -1131,18 +1264,70 @@ function renderCaptionList() {
   });
 }
 
+/**
+ * Recompute everything a composition derives from its token list.
+ *
+ * The id arrays matter as much as the text: the renderer draws from
+ * before_token_ids / after_token_ids, so any edit that changes a composition's
+ * words (split, combine, delete, reorder, retype) has to refresh them here or
+ * the canvas and the exported video keep showing the old words.
+ */
 function updateCompTexts(comp, tokenMap) {
-  const compTokens = comp.token_ids.map(id => tokenMap.get(id)).filter(Boolean);
-  const heroIdx = compTokens.findIndex(t => t.id === comp.hero_token_id);
-  const validHeroIdx = heroIdx >= 0 ? heroIdx : 0;
-  
-  const beforeTokens = compTokens.slice(0, validHeroIdx);
-  const heroToken = compTokens[validHeroIdx];
-  const afterTokens = compTokens.slice(validHeroIdx + 1);
+  const map = tokenMap || new Map(state.tokens.map(t => [t.id, t]));
 
-  comp.hero_text = heroToken ? heroToken.text.trim() : '';
+  // Drop ids whose tokens no longer exist, so a deleted word cannot linger.
+  comp.token_ids = (comp.token_ids || []).filter(id => map.has(id));
+
+  const compTokens = comp.token_ids.map(id => map.get(id));
+  if (!compTokens.length) {
+    comp.hero_token_id = null;
+    comp.before_token_ids = [];
+    comp.after_token_ids = [];
+    comp.hero_text = '';
+    comp.before_text = '';
+    comp.after_text = '';
+    return;
+  }
+
+  let heroIdx = compTokens.findIndex(t => t.id === comp.hero_token_id);
+  if (heroIdx < 0) heroIdx = 0;
+
+  const beforeTokens = compTokens.slice(0, heroIdx);
+  const heroToken = compTokens[heroIdx];
+  const afterTokens = compTokens.slice(heroIdx + 1);
+
+  comp.hero_token_id = heroToken.id;
+  comp.before_token_ids = beforeTokens.map(t => t.id);
+  comp.after_token_ids = afterTokens.map(t => t.id);
+  comp.hero_text = heroToken.text.trim();
   comp.before_text = beforeTokens.map(t => t.text.trim()).join(' ');
   comp.after_text = afterTokens.map(t => t.text.trim()).join(' ');
+
+  // Timing follows the tokens too, so a composition never outlives its words.
+  comp.start_ms = Math.min(...compTokens.map(t => t.start_ms));
+  comp.end_ms = Math.max(...compTokens.map(t => t.end_ms));
+}
+
+/**
+ * Re-derive every composition and drop any that no longer has words.
+ * Called after edits that can affect more than one composition.
+ */
+function reconcileCompositions() {
+  const map = new Map(state.tokens.map(t => [t.id, t]));
+  for (const comp of state.compositions) updateCompTexts(comp, map);
+  state.compositions = state.compositions.filter(c => c.token_ids.length);
+  state.compositions.sort((a, b) => a.start_ms - b.start_ms);
+  if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
+}
+
+/**
+ * The single commit point for a caption edit: bring derived data back in sync,
+ * persist, then redraw everything. Every edit path goes through here so none of
+ * them can forget a step.
+ */
+function commitEdit() {
+  reconcileCompositions();
+  commitEdit();
 }
 
 function handleWordClick(compId, tokenId) {
@@ -1181,15 +1366,23 @@ function handleWordClick(compId, tokenId) {
   renderCaptionList();
 }
 
-const LAYOUT_ORDER = ['stack_center', 'before_left_after_right', 'hero_left_support_right', 'hero_only'];
+// How each line is treated: one highlighted word, no highlight at all, or the
+// chosen word alone on screen. The renderer reads comp_type directly.
+const COMP_TYPE_ORDER = ['emphasis', 'plain', 'spotlight'];
+const COMP_TYPE_LABELS = {
+  emphasis: 'highlight one word',
+  plain: 'no highlight',
+  spotlight: 'single word only'
+};
+const COMP_TYPE_ICONS = { emphasis: '\u25C9', plain: '\u25CB', spotlight: '\u2605' };
 
-function cycleLayout(compId) {
-  pushUndoState();
+function cycleCompType(compId) {
   const comp = state.compositions.find(c => c.id === compId);
   if (!comp) return;
-  const idx = LAYOUT_ORDER.indexOf(comp.layout_id);
-  comp.layout_id = LAYOUT_ORDER[(idx + 1) % LAYOUT_ORDER.length];
-  renderCaptionList();
+  pushUndoState();
+  const idx = COMP_TYPE_ORDER.indexOf(comp.comp_type || 'emphasis');
+  comp.comp_type = COMP_TYPE_ORDER[(idx + 1) % COMP_TYPE_ORDER.length];
+  commitEdit();
 }
 
 // â”€â”€â”€ View Toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1248,8 +1441,6 @@ function highlightActiveCaption() {
   document.querySelectorAll('.caption-line').forEach(el => {
     el.classList.toggle('active', el.dataset.compId === state.activeCompositionId);
   });
-  
-  syncStyleInspectorToActive();
 
   if (state.userHoveringCaptions) return; // Do not auto-scroll if user is hovering/interacting!
 
@@ -1282,89 +1473,62 @@ function formatTime(seconds) {
 }
 
 // â”€â”€â”€ Canvas Caption Overlay (Live Preview) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Uses the shared TemplateEngine (loaded from template-engine.js)
+// Drawn by the same renderer module the server uses for the final export.
+
+// The preview loop only runs while a project is open. It used to be started
+// again on every project open and never stopped, so loops accumulated and kept
+// burning CPU on the dashboard with nothing to draw.
+let renderLoopHandle = null;
 
 function renderLoop() {
   renderCaptions();
-  requestAnimationFrame(renderLoop);
+  renderLoopHandle = requestAnimationFrame(renderLoop);
+}
+
+function startRenderLoop() {
+  if (renderLoopHandle !== null) return;
+  renderLoopHandle = requestAnimationFrame(renderLoop);
+}
+
+function stopRenderLoop() {
+  if (renderLoopHandle === null) return;
+  cancelAnimationFrame(renderLoopHandle);
+  renderLoopHandle = null;
 }
 
 // Bounding box state for dragging
 let dragBox = null; // { x, y, w, h } in 1080x1920 canvas coordinates
 let activeDrag = null; // null | { type: 'move'|'scale', startX, startY, startCenterX, startCenterY, startHeroSize, startSupportSize }
 
+/**
+ * Box around the caption currently on screen, in canvas pixels.
+ *
+ * Delegates to the renderer's own layout rather than recomputing it here — the
+ * previous local copy of the layout maths drifted from what was actually drawn
+ * and referenced a helper that was never in scope, so it threw on every frame
+ * while the video was paused.
+ */
 function getActiveCaptionBox(ctx) {
-  if (!state.template || !state.compositions.length) return null;
-  const ms = state.currentTime * 1000;
-  const comp = state.compositions.find(c => ms >= c.start_ms && ms <= c.end_ms);
-  if (!comp) return null;
+  if (!state.template || !state.compositions.length || !window.CaptionRenderer) return null;
 
-  const layout = state.template.layout;
-  if (!layout.captionCenterX) layout.captionCenterX = 0.5;
-  if (!layout.captionCenterY) layout.captionCenterY = 0.52;
+  const tokenMap = new Map(state.tokens.map(t => [t.id, t]));
+  const bounds = window.CaptionRenderer.getCaptionBounds(
+    ctx, state.currentTime * 1000, state.compositions, tokenMap,
+    state.template, captionCanvas.width
+  );
+  if (!bounds) return null;
 
-  const centerX = state.baseCanvasWidth * layout.captionCenterX;
-  const centerY = state.baseCanvasHeight * layout.captionCenterY;
-  
-  const compType = comp.comp_type || 'emphasis';
-  const heroFontSize = state.template.hero.fontSize;
-  const supportFontSize = state.template.support.fontSize;
-  const lineGap = Math.round(supportFontSize * 0.15);
-
-  let w = 0, h = 0, y = 0;
-
-  if (compType === 'plain') {
-    const allText = comp.token_ids
-      .map(id => state.tokens.find(t => t.id === id))
-      .filter(Boolean)
-      .map(t => t.text.trim())
-      .join(' ');
-    
-    ctx.font = `${state.template.support.fontWeight} ${supportFontSize}px ${getFontFamilyString(state.template.support.fontFamily)}`;
-    const textWidth = ctx.measureText(allText).width;
-    w = Math.max(300, textWidth + 60);
-    h = supportFontSize * 1.5;
-    y = centerY - h / 2;
-  } else if (compType === 'spotlight') {
-    const heroText = comp.token_ids
-      .map(id => state.tokens.find(t => t.id === id))
-      .filter(Boolean)
-      .map(t => t.text.trim())
-      .join(' ');
-    
-    ctx.font = `${state.template.hero.fontWeight} ${heroFontSize}px ${getFontFamilyString(state.template.hero.fontFamily)}`;
-    const textWidth = ctx.measureText(heroText).width;
-    w = Math.max(300, textWidth + 60);
-    h = heroFontSize * 1.5;
-    y = centerY - h / 2;
-  } else {
-    const tokenMap = new Map(state.tokens.map(t => [t.id, t]));
-    const beforeText = comp.before_text || '';
-    const heroText = (tokenMap.get(comp.hero_token_id)?.text || '').trim();
-    const afterText = comp.after_text || '';
-    
-    ctx.font = `${state.template.support.fontWeight} ${supportFontSize}px ${getFontFamilyString(state.template.support.fontFamily)}`;
-    const beforeWidth = beforeText ? ctx.measureText(beforeText).width : 0;
-    const afterWidth = afterText ? ctx.measureText(afterText).width : 0;
-    
-    ctx.font = `${state.template.hero.fontWeight} ${heroFontSize}px ${getFontFamilyString(state.template.hero.fontFamily)}`;
-    const heroWidth = heroText ? ctx.measureText(heroText).width : 0;
-    
-    const beforeY = centerY - Math.round(heroFontSize * 0.5) - Math.round(supportFontSize * 0.5) - lineGap;
-    const afterY = centerY + Math.round(heroFontSize * 0.5) + Math.round(supportFontSize * 0.5) + lineGap;
-    
-    const topY = beforeText ? (beforeY - supportFontSize / 2) : (centerY - heroFontSize / 2);
-    const bottomY = afterText ? (afterY + supportFontSize / 2) : (centerY + heroFontSize / 2);
-    
-    h = bottomY - topY + 40;
-    w = Math.max(beforeWidth, heroWidth, afterWidth) + 80;
-    y = topY - 20;
-  }
-
-  return { x: centerX - w / 2, y, w, h };
+  // Convert to the fixed 1080x1920 space the drag handlers work in, and pad a
+  // little so the outline sits clear of the glyphs.
+  const toBase = state.baseCanvasWidth / captionCanvas.width;
+  const pad = 18;
+  return {
+    x: bounds.x * toBase - pad,
+    y: bounds.y * toBase - pad,
+    w: bounds.width * toBase + pad * 2,
+    h: bounds.height * toBase + pad * 2
+  };
 }
-
-function drawBoundingBox() {}
 
 function initCanvasInteraction() {
   const outline = $('canvasSelectOutline');
@@ -1383,13 +1547,9 @@ function initCanvasInteraction() {
     const scaleX = state.baseCanvasWidth / rect.width;
     const scaleY = state.baseCanvasHeight / rect.height;
 
-    const ms = state.currentTime * 1000;
-    const comp = state.compositions.find(c => ms >= c.start_ms && ms <= c.end_ms);
-    const effective = comp ? TemplateEngine.getEffectiveTemplate(state.template, comp) : state.template;
-
     const handle = e.target.closest('.handle');
     if (handle) {
-      // Corner handle dragging to scale based on distance from center
+      // Corner handle: scale by how far the pointer moves from the box centre.
       const centerX = dragBox.x + dragBox.w / 2;
       const centerY = dragBox.y + dragBox.h / 2;
 
@@ -1401,18 +1561,16 @@ function initCanvasInteraction() {
         type: 'scale',
         startX: e.clientX,
         startY: e.clientY,
-        startHeroSize: effective.hero.fontSize,
-        startSupportSize: effective.support.fontSize,
+        startFontSize: state.template.font.size,
         startDist: Math.max(10, startDist) // Avoid division by zero
       };
     } else {
-      // Repositioning drag
       activeDrag = {
         type: 'move',
         startX: e.clientX,
         startY: e.clientY,
-        startCenterX: effective.layout.captionCenterX || 0.5,
-        startCenterY: effective.layout.captionCenterY || 0.52
+        startCenterX: state.template.layout.x,
+        startCenterY: state.template.layout.y
       };
     }
   });
@@ -1429,67 +1587,27 @@ function initCanvasInteraction() {
     const deltaX = (e.clientX - activeDrag.startX) * scaleX;
     const deltaY = (e.clientY - activeDrag.startY) * scaleY;
 
-    const ms = state.currentTime * 1000;
-    const comp = state.compositions.find(c => ms >= c.start_ms && ms <= c.end_ms);
-
     if (activeDrag.type === 'move') {
-      const newX = Math.max(0.1, Math.min(0.9, activeDrag.startCenterX + deltaX / 1080));
-      const newY = Math.max(0.1, Math.min(0.9, activeDrag.startCenterY + deltaY / 1920));
-
-      const applyToAll = $('applyToAllToggle') ? $('applyToAllToggle').checked : true;
-      if (applyToAll) {
-        state.template.layout.captionCenterX = newX;
-        state.template.layout.captionCenterY = newY;
-        if (comp) {
-          delete comp.override_center_x;
-          delete comp.override_center_y;
-        }
-      } else {
-        if (comp) {
-          comp.override_center_x = newX;
-          comp.override_center_y = newY;
-        }
-      }
-      renderCaptions();
+      const newX = Math.max(0.1, Math.min(0.9, activeDrag.startCenterX + deltaX / state.baseCanvasWidth));
+      const newY = Math.max(0.08, Math.min(0.94, activeDrag.startCenterY + deltaY / state.baseCanvasHeight));
+      setStyleOverrides({ x: newX, y: newY });
+      setControl('soX', Math.round(newX * 100));
+      setOutput('soXVal', Math.round(newX * 100));
+      setControl('soY', Math.round(newY * 100));
+      setOutput('soYVal', Math.round(newY * 100));
     } else if (activeDrag.type === 'scale') {
-      // Distance-from-center scale calculation (radial scaling)
       const centerX = dragBox.x + dragBox.w / 2;
       const centerY = dragBox.y + dragBox.h / 2;
 
       const mouseCanvasX = (e.clientX - rect.left) * scaleX;
       const mouseCanvasY = (e.clientY - rect.top) * scaleY;
       const currentDist = Math.hypot(mouseCanvasX - centerX, mouseCanvasY - centerY);
-
       const ratio = currentDist / activeDrag.startDist;
 
-      const newHero = Math.max(40, Math.min(300, activeDrag.startHeroSize * ratio));
-      const newSupport = Math.max(15, Math.min(150, activeDrag.startSupportSize * ratio));
-
-      const applyToAll = $('applyToAllToggle') ? $('applyToAllToggle').checked : true;
-      if (applyToAll) {
-        state.template.hero.fontSize = Math.round(newHero);
-        state.template.support.fontSize = Math.round(newSupport);
-        if (comp) {
-          delete comp.override_hero_size;
-          delete comp.override_support_size;
-        }
-      } else {
-        if (comp) {
-          comp.override_hero_size = Math.round(newHero);
-          comp.override_support_size = Math.round(newSupport);
-        }
-      }
-
-      // Sync style inspector sliders with current values
-      if ($('heroSizeSlider')) {
-        $('heroSizeSlider').value = Math.round(newHero);
-        $('heroSizeVal').textContent = Math.round(newHero);
-      }
-      if ($('supportSizeSlider')) {
-        $('supportSizeSlider').value = Math.round(newSupport);
-        $('supportSizeVal').textContent = Math.round(newSupport);
-      }
-      renderCaptions();
+      const newSize = Math.round(Math.max(28, Math.min(160, activeDrag.startFontSize * ratio)));
+      setStyleOverride('fontSize', newSize);
+      setControl('soFontSize', newSize);
+      setOutput('soFontSizeVal', newSize);
     }
   });
 
@@ -1505,7 +1623,7 @@ function initCanvasInteraction() {
 initCanvasInteraction();
 
 function renderCaptions() {
-  if (!state.template) return;
+  if (!state.template || !window.CaptionRenderer) return;
 
   const canvas = captionCanvas;
   const cw = canvas.width;
@@ -1515,9 +1633,8 @@ function renderCaptions() {
   const ms = state.currentTime * 1000;
   const tokenMap = new Map(state.tokens.map(t => [t.id, t]));
 
-  TemplateEngine.renderComposition(
-    ctx, ms, state.compositions, tokenMap,
-    state.template, cw, ch, state.animation
+  window.CaptionRenderer.renderCaptionFrame(
+    ctx, ms, state.compositions, tokenMap, state.template, cw, ch
   );
   
   const outline = $('canvasSelectOutline');
@@ -1833,264 +1950,254 @@ function onRulerMouseUp(e) {
 // â”€â”€â”€ Style Controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These modify the loaded template in-memory for live preview.
 
-$('heroColorPicker').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.hero.color = e.target.value;
-    $('heroColorHex').textContent = e.target.value;
-    document.documentElement.style.setProperty('--hero-color', e.target.value);
-  });
-});
-
-$('supportColorPicker').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.support.color = e.target.value;
-    $('supportColorHex').textContent = e.target.value;
-  });
-});
-
-$('heroSizeSlider').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.hero.fontSize = Number(e.target.value);
-    $('heroSizeVal').textContent = e.target.value;
-  });
-});
-
-$('supportSizeSlider').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.support.fontSize = Number(e.target.value);
-    $('supportSizeVal').textContent = e.target.value;
-  });
-});
-
-$('fontSelect').addEventListener('change', e => {
-  updateStyleProperty(t => {
-    t.hero.fontFamily = e.target.value;
-    t.support.fontFamily = e.target.value;
-  });
-  saveProjectState();
-});
-
-// Accordion Control Listeners
-$('heroUppercaseToggle').addEventListener('change', e => {
-  updateStyleProperty(t => {
-    t.hero.uppercase = e.target.checked;
-  });
-  saveProjectState();
-});
-
-$('supportUppercaseToggle').addEventListener('change', e => {
-  updateStyleProperty(t => {
-    t.support.uppercase = e.target.checked;
-  });
-  saveProjectState();
-});
-
-$('captionYSlider').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.layout.captionCenterY = Number(e.target.value) / 100;
-    $('captionYVal').textContent = e.target.value;
-  });
-});
-$('captionYSlider').addEventListener('change', saveProjectState);
-
-$('captionXSlider').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.layout.captionCenterX = Number(e.target.value) / 100;
-    $('captionXVal').textContent = e.target.value;
-  });
-});
-$('captionXSlider').addEventListener('change', saveProjectState);
-
-$('letterSpacingSlider').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.hero.letterSpacing = Number(e.target.value);
-    t.support.letterSpacing = Number(e.target.value);
-    $('letterSpacingVal').textContent = e.target.value;
-  });
-});
-$('letterSpacingSlider').addEventListener('change', saveProjectState);
-
-$('strokeToggle').addEventListener('change', e => {
-  updateStyleProperty(t => {
-    if (!t.hero.stroke) t.hero.stroke = { enabled: false, color: '#000000', width: 0 };
-    if (!t.support.stroke) t.support.stroke = { enabled: false, color: '#000000', width: 0 };
-    t.hero.stroke.enabled = e.target.checked;
-    t.support.stroke.enabled = e.target.checked;
-  });
-  saveProjectState();
-});
-
-$('strokeColorPicker').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    if (!t.hero.stroke) t.hero.stroke = { enabled: false, color: '#000000', width: 0 };
-    if (!t.support.stroke) t.support.stroke = { enabled: false, color: '#000000', width: 0 };
-    t.hero.stroke.color = e.target.value;
-    t.support.stroke.color = e.target.value;
-    $('strokeColorHex').textContent = e.target.value;
-  });
-});
-$('strokeColorPicker').addEventListener('change', saveProjectState);
-
-$('strokeWidthSlider').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    if (!t.hero.stroke) t.hero.stroke = { enabled: false, color: '#000000', width: 0 };
-    if (!t.support.stroke) t.support.stroke = { enabled: false, color: '#000000', width: 0 };
-    t.hero.stroke.width = Number(e.target.value);
-    t.support.stroke.width = Math.round(Number(e.target.value) * 0.4);
-    $('strokeWidthVal').textContent = e.target.value;
-  });
-});
-$('strokeWidthSlider').addEventListener('change', saveProjectState);
-
-$('shadowToggle').addEventListener('change', e => {
-  updateStyleProperty(t => {
-    t.hero.dropShadow.enabled = e.target.checked;
-    t.support.dropShadow.enabled = e.target.checked;
-  });
-  saveProjectState();
-});
-
-$('shadowBlurSlider').addEventListener('input', e => {
-  updateStyleProperty(t => {
-    t.hero.dropShadow.blur = Number(e.target.value);
-    t.support.dropShadow.blur = Math.round(Number(e.target.value) * 0.7);
-    $('shadowBlurVal').textContent = e.target.value;
-  });
-});
-$('shadowBlurSlider').addEventListener('change', saveProjectState);
-
-// Track mousedown on all style controls to push undo states
-const slidersToTrack = [
-  'heroSizeSlider', 'supportSizeSlider', 'captionYSlider', 'captionXSlider',
-  'letterSpacingSlider', 'strokeWidthSlider', 'shadowBlurSlider',
-  'heroColorPicker', 'supportColorPicker', 'strokeColorPicker',
-  'fontSelect', 'heroUppercaseToggle', 'supportUppercaseToggle',
-  'strokeToggle', 'shadowToggle'
-];
-slidersToTrack.forEach(id => {
+/**
+ * Wire one inspector control to a style override key.
+ *
+ * `transform` maps the control's raw value to the override value, and
+ * `readout` renders the label shown next to the control.
+ */
+function bindStyleControl(id, key, { event = 'input', transform = v => v, readout = null } = {}) {
   const el = $(id);
-  if (el) {
-    el.addEventListener('mousedown', () => pushUndoState());
-    el.addEventListener('change', () => pushUndoState());
-  }
+  if (!el) return;
+
+  el.addEventListener('mousedown', () => pushUndoState());
+  el.addEventListener('keydown', () => pushUndoState());
+
+  el.addEventListener(event, e => {
+    const raw = el.type === 'checkbox' ? el.checked : e.target.value;
+    const value = transform(raw);
+    setStyleOverride(key, value);
+    if (readout) setOutput(readout.id, readout.format(value, raw));
+  });
+
+  // Persist once the interaction settles rather than on every pixel of a drag.
+  el.addEventListener('change', () => saveProjectState());
+}
+
+const num = v => Number(v);
+const pct = v => Number(v) / 100;
+
+bindStyleControl('soFontFamily', 'fontFamily', { event: 'change' });
+bindStyleControl('soFontWeight', 'fontWeight', { event: 'change', transform: num });
+bindStyleControl('soFontSize', 'fontSize', {
+  transform: num, readout: { id: 'soFontSizeVal', format: v => Math.round(v) }
+});
+bindStyleControl('soCasing', 'casing', { event: 'change' });
+bindStyleControl('soLetterSpacing', 'letterSpacing', {
+  transform: num, readout: { id: 'soLetterSpacingVal', format: v => v }
+});
+bindStyleControl('soLineHeight', 'lineHeight', {
+  transform: num, readout: { id: 'soLineHeightVal', format: v => v.toFixed(2) }
 });
 
-// Canvas bulk tools action handlers
-$('applyAllCoordsBtn').addEventListener('click', () => {
-  if (!state.projectId) return;
-  // State coordinates are global anyway, but we explicitly persist and alert
-  saveProjectState().then(() => {
-    alert('âœ“ Coordinates and sizes successfully locked and applied to all compositions!');
+bindStyleControl('soY', 'y', { transform: pct, readout: { id: 'soYVal', format: (v, raw) => raw } });
+bindStyleControl('soX', 'x', { transform: pct, readout: { id: 'soXVal', format: (v, raw) => raw } });
+bindStyleControl('soMaxWidth', 'maxWidthPct', {
+  transform: pct, readout: { id: 'soMaxWidthVal', format: (v, raw) => raw }
+});
+bindStyleControl('soMaxLines', 'maxLines', { event: 'change', transform: num });
+bindStyleControl('soAlign', 'align', { event: 'change' });
+bindStyleControl('soReveal', 'reveal', { event: 'change' });
+
+bindStyleControl('soBaseColor', 'baseColor', { readout: { id: 'soBaseColorHex', format: v => v } });
+bindStyleControl('soActiveColor', 'activeColor', { readout: { id: 'soActiveColorHex', format: v => v } });
+
+bindStyleControl('soStrokeEnabled', 'strokeEnabled', { event: 'change' });
+bindStyleControl('soStrokeWidth', 'strokeWidth', {
+  transform: num, readout: { id: 'soStrokeWidthVal', format: v => v }
+});
+bindStyleControl('soStrokeColor', 'strokeColor', { readout: { id: 'soStrokeColorHex', format: v => v } });
+
+bindStyleControl('soShadowEnabled', 'shadowEnabled', { event: 'change' });
+bindStyleControl('soShadowBlur', 'shadowBlur', {
+  transform: num, readout: { id: 'soShadowBlurVal', format: v => v }
+});
+
+bindStyleControl('soGlowEnabled', 'glowEnabled', { event: 'change' });
+bindStyleControl('soGlowColor', 'glowColor', { readout: { id: 'soGlowColorHex', format: v => v } });
+
+bindStyleControl('soAnimationType', 'animationType', { event: 'change' });
+bindStyleControl('soAnimationTarget', 'animationTarget', { event: 'change' });
+bindStyleControl('soAnimationDuration', 'animationDurationMs', {
+  transform: num, readout: { id: 'soAnimationDurationVal', format: v => v }
+});
+
+bindStyleControl('soPopEnabled', 'popEnabled', { event: 'change' });
+bindStyleControl('soPopScale', 'popScale', {
+  transform: num, readout: { id: 'soPopScaleVal', format: v => v.toFixed(2) }
+});
+
+bindStyleControl('soHeroSizeScale', 'heroSizeScale', {
+  transform: num, readout: { id: 'soHeroSizeScaleVal', format: v => v.toFixed(2) }
+});
+
+// Changing family can invalidate the selected weight, so re-offer the weights
+// that actually exist for the new family.
+if ($('soFontFamily')) {
+  $('soFontFamily').addEventListener('change', e => {
+    populateWeightOptions(e.target.value, state.template ? state.template.font.weight : 700);
+    setStyleOverride('fontWeight', Number($('soFontWeight').value));
+    saveProjectState();
+  });
+}
+
+if ($('resetStyleBtn')) {
+  $('resetStyleBtn').addEventListener('click', () => {
+    if (!Object.keys(state.styleOverrides).length) return;
+    pushUndoState();
+    state.styleOverrides = {};
+    refreshTemplate();
+    syncStyleInspector();
+    renderCaptions();
+    saveProjectState();
+  });
+}
+
+// Inspector tabs
+document.querySelectorAll('.inspector-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.tab;
+    document.querySelectorAll('.inspector-tab').forEach(t => {
+      const active = t === tab;
+      t.classList.toggle('active', active);
+      t.setAttribute('aria-selected', String(active));
+    });
+    document.querySelectorAll('.inspector-panel').forEach(panel => {
+      panel.classList.toggle('hidden', panel.dataset.panel !== target);
+    });
   });
 });
+
+if ($('templateSearch')) {
+  $('templateSearch').addEventListener('input', e => {
+    state.templateQuery = e.target.value;
+    renderTemplateGallery();
+  });
+}
 
 function applyLowResMode() {
-  const isLowRes = $('lowResToggle').checked;
+  const isLowRes = $('lowResToggle') ? $('lowResToggle').checked : false;
   const factor = isLowRes ? 0.5 : 1.0;
   captionCanvas.width = state.baseCanvasWidth * factor;
   captionCanvas.height = state.baseCanvasHeight * factor;
+  if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
   renderCaptions();
 }
 
-$('lowResToggle').addEventListener('change', applyLowResMode);
-
-// Initialize low res canvas scaling on boot
+if ($('lowResToggle')) $('lowResToggle').addEventListener('change', applyLowResMode);
 applyLowResMode();
-
-// Autosave project state upon layout adjustments
-$('heroColorPicker').addEventListener('change', saveProjectState);
-$('supportColorPicker').addEventListener('change', saveProjectState);
-$('heroSizeSlider').addEventListener('change', saveProjectState);
-$('supportSizeSlider').addEventListener('change', saveProjectState);
-$('fontSelect').addEventListener('change', saveProjectState);
 
 // â”€â”€â”€ Export: MP4 (Server-side frame-by-frame) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+const STATUS_LABELS = {
+  queued: 'Waiting for a free render slot...',
+  probing: 'Reading the source video...',
+  rendering: 'Rendering caption frames...',
+  completed: 'Done — starting download...',
+  failed: 'Export failed',
+  cancelled: 'Export cancelled'
+};
+
+function setExportProgress(percent, label) {
+  exportProgressFill.style.width = `${percent}%`;
+  exportPercent.textContent = `${Math.round(percent)}%`;
+  if (label) exportStatus.textContent = label;
+}
+
+/**
+ * Render on the server as a tracked job.
+ *
+ * Progress comes from the job's real frame counter rather than a timer, and
+ * cancelling actually stops the render instead of only hiding the dialog.
+ */
 async function exportMP4() {
   if (state.exporting) return;
-  state.exporting = true;
-  state.exportCancelled = false;
+  if (!state.compositions.length) {
+    alert('There are no captions to render yet.');
+    return;
+  }
 
+  state.exporting = true;
+  state.exportJobId = null;
   exportModal.classList.remove('hidden');
-  exportProgressFill.style.width = '0%';
-  exportStatus.textContent = 'Sending to server for HD export...';
-  exportPercent.textContent = '0%';
+  setExportProgress(0, 'Queueing export...');
 
   try {
-    // Start a progress poller â€” the server logs progress but we simulate it client-side
-    let fakeProgress = 0;
-    const progressInterval = setInterval(() => {
-      if (state.exportCancelled) {
-        clearInterval(progressInterval);
-        return;
-      }
-      // Slowly increment progress to give feedback
-      fakeProgress = Math.min(fakeProgress + 0.5, 95);
-      exportProgressFill.style.width = fakeProgress + '%';
-      exportPercent.textContent = Math.round(fakeProgress) + '%';
-
-      if (fakeProgress < 20) {
-        exportStatus.textContent = 'Analyzing video...';
-      } else if (fakeProgress < 70) {
-        exportStatus.textContent = 'Rendering caption frames...';
-      } else {
-        exportStatus.textContent = 'Encoding H.264 MP4...';
-      }
-    }, 500);
-
-    const response = await fetch('/api/export-mp4', {
+    const response = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         compositions: state.compositions,
         tokens: state.tokens,
         templateId: state.templateId,
-        template: state.template, // Pass custom template overrides!
-        animation: state.animation,
-        videoUrl: state.videoUrl
+        styleOverrides: state.styleOverrides,
+        videoUrl: state.videoUrl,
+        title: state.filename.replace(/\.[^/.]+$/, '')
       })
     });
 
-    clearInterval(progressInterval);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Could not start export (HTTP ${response.status})`);
+    state.exportJobId = data.jobId;
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `Export failed (HTTP ${response.status})`);
+    const job = await pollExportJob(data.jobId);
+
+    if (job.status === 'cancelled') {
+      setExportProgress(0, STATUS_LABELS.cancelled);
+      setTimeout(() => exportModal.classList.add('hidden'), 1200);
+      return;
+    }
+    if (job.status !== 'completed') {
+      throw new Error(job.error || 'Rendering failed.');
     }
 
-    // Download the MP4
-    exportStatus.textContent = 'Download starting...';
-    exportProgressFill.style.width = '100%';
-    exportPercent.textContent = '100%';
-
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const baseName = state.filename.replace(/\.[^/.]+$/, '');
-    a.download = `${baseName}-captioned.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-
-    state.exporting = false;
-    exportModal.classList.add('hidden');
-
+    setExportProgress(100, STATUS_LABELS.completed);
+    triggerDownload(job.downloadUrl);
+    setTimeout(() => exportModal.classList.add('hidden'), 900);
   } catch (error) {
     console.error('Export error:', error);
     exportStatus.textContent = 'Export failed: ' + error.message;
-    setTimeout(() => {
-      exportModal.classList.add('hidden');
-      state.exporting = false;
-    }, 4000);
+    setTimeout(() => exportModal.classList.add('hidden'), 5000);
+  } finally {
+    state.exporting = false;
+    state.exportJobId = null;
   }
 }
 
+async function pollExportJob(jobId) {
+  while (true) {
+    await new Promise(r => setTimeout(r, 500));
+    const res = await fetch(`/api/export/${jobId}`);
+    if (!res.ok) throw new Error('Lost track of the export job.');
+    const job = await res.json();
+
+    const label = job.status === 'rendering' && job.totalFrames
+      ? `Rendering frame ${job.frame} of ${job.totalFrames}...`
+      : STATUS_LABELS[job.status] || job.status;
+    setExportProgress(job.progress || 0, label);
+
+    if (['completed', 'failed', 'cancelled'].includes(job.status)) return job;
+  }
+}
+
+function triggerDownload(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 $('exportBtn').addEventListener('click', exportMP4);
-$('exportMainBtn').addEventListener('click', exportMP4);
-$('cancelExportBtn').addEventListener('click', () => {
-  state.exportCancelled = true;
+if ($('exportMainBtn')) $('exportMainBtn').addEventListener('click', exportMP4);
+$('cancelExportBtn').addEventListener('click', async () => {
+  if (!state.exportJobId) {
+    exportModal.classList.add('hidden');
+    return;
+  }
+  exportStatus.textContent = 'Cancelling...';
+  await fetch(`/api/export/${state.exportJobId}/cancel`, { method: 'POST' }).catch(() => {});
 });
 
 // â”€â”€â”€ Export: SRT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2119,63 +2226,6 @@ $('exportSrtBtn').addEventListener('click', async () => {
     alert('SRT export failed: ' + err.message);
   }
 });
-
-// â”€â”€â”€ Close / Unload Project â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-function closeProject() {
-  if (state.isPlaying) {
-    videoPlayer.pause();
-    state.isPlaying = false;
-    if (playIcon) playIcon.classList.remove('hidden');
-    if (pauseIcon) pauseIcon.classList.add('hidden');
-  }
-
-  // Clear video source
-  videoPlayer.src = '';
-  videoPlayer.load();
-
-  // Reset state
-  state.projectId = null;
-  state.tokens = [];
-  state.compositions = [];
-  state.videoUrl = '';
-  state.filename = '';
-  state.videoDuration = 0;
-  state.currentTime = 0;
-  state.activeCompositionId = null;
-
-  // Toggle body classes
-  document.body.classList.add('project-unloaded');
-  document.body.classList.remove('project-loaded');
-
-  // Toggle state panels
-  if ($('unloadedLeftState')) $('unloadedLeftState').classList.remove('hidden');
-  if ($('loadedLeftState')) $('loadedLeftState').classList.add('hidden');
-
-  if ($('unloadedCenterState')) $('unloadedCenterState').classList.remove('hidden');
-  if ($('loadedCenterState')) $('loadedCenterState').classList.add('hidden');
-
-  if ($('unloadedRightState')) $('unloadedRightState').classList.remove('hidden');
-  if ($('loadedRightState')) $('loadedRightState').classList.add('hidden');
-
-  if ($('unloadedTimelineState')) $('unloadedTimelineState').classList.remove('hidden');
-  if ($('loadedTimelineState')) $('loadedTimelineState').classList.add('hidden');
-
-  // Show upload form, hide processing state
-  if ($('uploadForm')) $('uploadForm').classList.remove('hidden');
-  if ($('processingState')) $('processingState').classList.add('hidden');
-  if ($('uploadSelected')) $('uploadSelected').classList.remove('visible');
-  if ($('mediaInput')) $('mediaInput').value = '';
-
-  if (topbarFilename) topbarFilename.textContent = '';
-
-  loadProjectsList();
-}
-
-const closeProjectBtn = $('closeProjectBtn');
-if (closeProjectBtn) {
-  closeProjectBtn.addEventListener('click', closeProject);
-}
 
 // Search Projects Filter
 const projectSearchInput = $('projectSearchInput');
@@ -2227,10 +2277,7 @@ function splitCompositionAtWord(compId, tokenId) {
   const idx = state.compositions.findIndex(c => c.id === compId);
   state.compositions.splice(idx + 1, 0, newComp);
 
-  saveProjectState();
-  renderCaptionList();
-  renderTimeline();
-  renderCaptions();
+  commitEdit();
 }
 
 function moveWordToken(draggedId, targetId) {
@@ -2289,10 +2336,7 @@ function moveWordToken(draggedId, targetId) {
   targetComp.end_ms = tokenMap.get(targetComp.token_ids[targetComp.token_ids.length - 1]).end_ms;
   updateCompTexts(targetComp, tokenMap);
 
-  saveProjectState();
-  renderCaptionList();
-  renderTimeline();
-  renderCaptions();
+  commitEdit();
 }
 
 function initWordContextMenu() {
@@ -2315,10 +2359,7 @@ function initWordContextMenu() {
     }
     const tokenMap = new Map(state.tokens.map(t => [t.id, t]));
     updateCompTexts(comp, tokenMap);
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 
   // Toggle Emphasis option
@@ -2337,10 +2378,7 @@ function initWordContextMenu() {
     }
     const tokenMap = new Map(state.tokens.map(t => [t.id, t]));
     updateCompTexts(comp, tokenMap);
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 
   // Split option
@@ -2378,10 +2416,7 @@ function initWordContextMenu() {
 
     state.selectedTokenIds = [];
     updateCompTexts(comp, tokenMap);
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 
   // Add Word After option
@@ -2424,10 +2459,7 @@ function initWordContextMenu() {
     comp.end_ms = freshTokenMap.get(comp.token_ids[comp.token_ids.length - 1]).end_ms;
 
     updateCompTexts(comp, freshTokenMap);
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 
   // Delete option
@@ -2451,10 +2483,7 @@ function initWordContextMenu() {
     state.compositions.forEach(comp => updateCompTexts(comp, tokenMap));
 
     state.selectedTokenIds = [];
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 
   // Global dismiss context menu
@@ -2511,10 +2540,7 @@ if (captionToolsBtn && captionToolsMenu) {
       updateCompTexts(comp, tokenMap);
     });
 
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 
   // 2. Strip Emphasis
@@ -2525,10 +2551,7 @@ if (captionToolsBtn && captionToolsMenu) {
       comp.comp_type = 'plain';
     });
 
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 
   // 3. Remove Gaps
@@ -2554,10 +2577,7 @@ if (captionToolsBtn && captionToolsMenu) {
       }
     }
 
-    saveProjectState();
-    renderCaptionList();
-    renderTimeline();
-    renderCaptions();
+    commitEdit();
   });
 }
 
@@ -2565,5 +2585,24 @@ if (captionToolsBtn && captionToolsMenu) {
 
 initWordContextMenu();
 loadProjectsList();
+
+if ($('undoBtn')) $('undoBtn').addEventListener('click', undo);
+if ($('redoBtn')) $('redoBtn').addEventListener('click', redo);
+updateUndoRedoButtons();
+
+/**
+ * The renderer is an ES module, so it finishes loading after this classic
+ * script. Everything that depends on it is set up once it announces itself.
+ */
+function onRendererReady() {
+  populateFontOptions();
+  refreshTemplate();
+  syncStyleInspector();
+  loadTemplateList();
+  renderCaptions();
+}
+
+if (window.CaptionRenderer) onRendererReady();
+else window.addEventListener('caption-renderer-ready', onRendererReady, { once: true });
 
 

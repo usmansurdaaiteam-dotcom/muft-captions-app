@@ -8,7 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=2.0.1" />
+  <link rel="stylesheet" href="/style.css?v=2.1.0" />
+  <!-- Caption fonts, served from the same files the export renderer uses. -->
+  <link rel="stylesheet" href="/caption-fonts.css" />
 </head>
 <body class="project-unloaded">
 
@@ -25,7 +27,7 @@
         <!-- Caption Tools: Loaded state only -->
         <div class="dropdown loaded-only">
           <button class="topbar-btn secondary" id="captionToolsBtn">
-            Caption Tools â–¾
+            Caption Tools &#9662;
           </button>
           <div class="dropdown-menu hidden" id="captionToolsMenu">
             <button class="dropdown-item" id="stripPunctuationBtn">Strip Punctuation</button>
@@ -60,7 +62,7 @@
 
       <div class="editor-body" id="editorBody">
 
-        <!-- â”€â”€â”€ LEFT PANEL: Captions (Loaded) or Project Dashboard (Unloaded) â”€â”€â”€ -->
+        <!-- --- LEFT PANEL: Captions (Loaded) or Project Dashboard (Unloaded) --- -->
         <aside class="panel panel-captions" id="captionPanel" style="width: 320px;">
           
           <!-- State 1: Unloaded Project List -->
@@ -113,7 +115,7 @@
 
 
 
-        <!-- â”€â”€â”€ CENTER PANEL: Upload Area (Unloaded) or Video Preview (Loaded) â”€â”€â”€ -->
+        <!-- --- CENTER PANEL: Upload Area (Unloaded) or Video Preview (Loaded) --- -->
         <main class="panel panel-video" id="videoPanel">
           
           <!-- State 1: Unloaded Upload Area -->
@@ -169,7 +171,7 @@
 
 
 
-        <!-- â”€â”€â”€ RIGHT PANEL: LOCKED State (Unloaded) or Style Inspector (Loaded) â”€â”€â”€ -->
+        <!-- --- RIGHT PANEL: LOCKED State (Unloaded) or Style Inspector (Loaded) --- -->
         <aside class="panel panel-style" id="stylePanel" style="width: 280px;">
           
           <!-- State 1: Unloaded Locked Inspector -->
@@ -185,192 +187,250 @@
 
           <!-- State 2: Loaded Template & Style Editor -->
           <div id="loadedRightState" class="loaded-right-state hidden">
-            <div class="panel-header">
-              <h2>Templates</h2>
+
+            <div class="inspector-tabs" role="tablist">
+              <button class="inspector-tab active" id="tabTemplates" data-tab="templates" role="tab" aria-selected="true">Templates</button>
+              <button class="inspector-tab" id="tabText" data-tab="text" role="tab" aria-selected="false">Text</button>
+              <button class="inspector-tab" id="tabMotion" data-tab="motion" role="tab" aria-selected="false">Motion</button>
+              <button class="inspector-tab" id="tabExport" data-tab="export" role="tab" aria-selected="false">Export</button>
             </div>
 
-            <!-- Template Card -->
-            <div class="template-section">
-              <div class="template-card active" id="glowTemplateCard">
-                <div class="template-preview glow-preview">
-                  <span class="tp-support">the quick</span>
-                  <span class="tp-hero">BROWN</span>
-                  <span class="tp-support">fox</span>
-                </div>
-                <div class="template-info">
-                  <span class="template-name">Muft Glow</span>
-                  <span class="template-badge">Active</span>
-                </div>
+            <!-- ── TEMPLATES ── -->
+            <div class="inspector-panel" data-panel="templates">
+              <div class="inspector-search">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="templateSearch" placeholder="Find a template..." aria-label="Search templates" />
               </div>
+              <div class="template-categories" id="templateCategories"></div>
+              <div class="template-gallery" id="templateGallery"></div>
             </div>
 
-            <!-- Style Accordion Controls -->
-            <div class="style-controls">
-              <div class="style-inspector-header">
-                <h3>Style Inspector</h3>
-                <label class="apply-all-checkbox-label">
-                  <input type="checkbox" id="applyToAllToggle" checked />
-                  <span>Apply to all</span>
+            <!-- ── TEXT ── -->
+            <div class="inspector-panel hidden" data-panel="text">
+              <div class="control-group">
+                <h4>Font</h4>
+                <label class="style-label">
+                  Family
+                  <select id="soFontFamily"></select>
+                </label>
+                <label class="style-label">
+                  Weight
+                  <select id="soFontWeight"></select>
+                </label>
+                <label class="style-label">
+                  Size <output id="soFontSizeVal">80</output>px
+                  <input type="range" id="soFontSize" min="28" max="160" step="1" value="80" />
+                </label>
+                <label class="style-label">
+                  Capitalisation
+                  <select id="soCasing">
+                    <option value="none">As spoken</option>
+                    <option value="upper">UPPERCASE</option>
+                    <option value="lower">lowercase</option>
+                    <option value="title">Title Case</option>
+                  </select>
                 </label>
               </div>
 
-              <!-- 1. FONTS -->
-              <details class="style-accordion" open>
-                <summary>FONTS</summary>
-                <div class="accordion-content">
+              <div class="control-group">
+                <h4>Colour</h4>
+                <label class="style-label">
+                  Normal words
+                  <div class="color-row">
+                    <input type="color" id="soBaseColor" value="#FFFFFF" />
+                    <span class="color-hex" id="soBaseColorHex">#FFFFFF</span>
+                  </div>
+                </label>
+                <label class="style-label">
+                  Highlighted word
+                  <div class="color-row">
+                    <input type="color" id="soActiveColor" value="#00FFB2" />
+                    <span class="color-hex" id="soActiveColorHex">#00FFB2</span>
+                  </div>
+                </label>
+              </div>
+
+              <div class="control-group">
+                <h4>Position</h4>
+                <label class="style-label">
+                  Vertical <output id="soYVal">72</output>%
+                  <input type="range" id="soY" min="8" max="94" step="1" value="72" />
+                </label>
+                <label class="style-label">
+                  Horizontal <output id="soXVal">50</output>%
+                  <input type="range" id="soX" min="10" max="90" step="1" value="50" />
+                </label>
+                <label class="style-label">
+                  Max width <output id="soMaxWidthVal">88</output>%
+                  <input type="range" id="soMaxWidth" min="40" max="98" step="1" value="88" />
+                </label>
+                <div class="control-row">
                   <label class="style-label">
-                    Font Family
-                    <select id="fontSelect">
-                      <option value="'Space Grotesk', sans-serif" selected>Space Grotesk</option>
-                      <option value="'Inter', sans-serif">Inter</option>
-                      <option value="Impact, sans-serif">Impact</option>
-                      <option value="'Arial Black', sans-serif">Arial Black</option>
-                      <option value="'Segoe UI', sans-serif">Segoe UI</option>
-                      <option value="Georgia, serif">Georgia</option>
+                    Lines
+                    <select id="soMaxLines">
+                      <option value="1">1</option>
+                      <option value="2" selected>2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </label>
+                  <label class="style-label">
+                    Align
+                    <select id="soAlign">
+                      <option value="center" selected>Center</option>
+                      <option value="left">Left</option>
+                      <option value="right">Right</option>
                     </select>
                   </label>
                 </div>
-              </details>
+              </div>
 
-              <!-- 2. FORMAT -->
-              <details class="style-accordion">
-                <summary>FORMAT</summary>
-                <div class="accordion-content">
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="heroUppercaseToggle" checked />
-                    <span>Hero Uppercase</span>
-                  </label>
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="supportUppercaseToggle" />
-                    <span>Support Uppercase</span>
-                  </label>
-                </div>
-              </details>
+              <div class="control-group">
+                <h4>Spacing</h4>
+                <label class="style-label">
+                  Letter spacing <output id="soLetterSpacingVal">0</output>px
+                  <input type="range" id="soLetterSpacing" min="-4" max="16" step="1" value="0" />
+                </label>
+                <label class="style-label">
+                  Line height <output id="soLineHeightVal">1.20</output>
+                  <input type="range" id="soLineHeight" min="0.9" max="2" step="0.02" value="1.2" />
+                </label>
+              </div>
 
-              <!-- 3. POSITION -->
-              <details class="style-accordion">
-                <summary>POSITION</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Vertical Position: <span id="captionYVal">55</span>%
-                    <input type="range" id="captionYSlider" min="10" max="90" value="55" />
-                  </label>
-                  <label class="style-label">
-                    Horizontal Position: <span id="captionXVal">50</span>%
-                    <input type="range" id="captionXSlider" min="10" max="90" value="50" />
-                  </label>
-                </div>
-              </details>
+              <div class="control-group">
+                <h4>Effects</h4>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soStrokeEnabled" />
+                  <span>Outline</span>
+                </label>
+                <label class="style-label">
+                  Outline width <output id="soStrokeWidthVal">4</output>px
+                  <input type="range" id="soStrokeWidth" min="0" max="16" step="1" value="4" />
+                </label>
+                <label class="style-label">
+                  Outline colour
+                  <div class="color-row">
+                    <input type="color" id="soStrokeColor" value="#000000" />
+                    <span class="color-hex" id="soStrokeColorHex">#000000</span>
+                  </div>
+                </label>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soShadowEnabled" checked />
+                  <span>Drop shadow</span>
+                </label>
+                <label class="style-label">
+                  Shadow blur <output id="soShadowBlurVal">14</output>px
+                  <input type="range" id="soShadowBlur" min="0" max="48" step="1" value="14" />
+                </label>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soGlowEnabled" />
+                  <span>Glow on highlighted word</span>
+                </label>
+                <label class="style-label">
+                  Glow colour
+                  <div class="color-row">
+                    <input type="color" id="soGlowColor" value="#00FFB2" />
+                    <span class="color-hex" id="soGlowColorHex">#00FFB2</span>
+                  </div>
+                </label>
+              </div>
 
-              <!-- 4. COLOR -->
-              <details class="style-accordion">
-                <summary>COLOR</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Hero Color
-                    <div class="color-row">
-                      <input type="color" id="heroColorPicker" value="#f5b942" />
-                      <span class="color-hex" id="heroColorHex">#f5b942</span>
-                    </div>
-                  </label>
-                  <label class="style-label">
-                    Support Color
-                    <div class="color-row">
-                      <input type="color" id="supportColorPicker" value="#FFFFFF" />
-                      <span class="color-hex" id="supportColorHex">#FFFFFF</span>
-                    </div>
-                  </label>
-                </div>
-              </details>
+              <div class="control-group hero-only" id="heroControls">
+                <h4>Hero word</h4>
+                <label class="style-label">
+                  Hero size <output id="soHeroSizeScaleVal">2.3</output>×
+                  <input type="range" id="soHeroSizeScale" min="1" max="3.5" step="0.05" value="2.3" />
+                </label>
+              </div>
 
-              <!-- 5. EMPHASIS -->
-              <details class="style-accordion">
-                <summary>EMPHASIS</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Hero Size: <span id="heroSizeVal">120</span>px
-                    <input type="range" id="heroSizeSlider" min="60" max="200" value="120" />
-                  </label>
-                  <label class="style-label">
-                    Support Size: <span id="supportSizeVal">46</span>px
-                    <input type="range" id="supportSizeSlider" min="20" max="90" value="46" />
-                  </label>
-                </div>
-              </details>
+              <button class="style-btn danger-outline" id="resetStyleBtn">Reset to template defaults</button>
+            </div>
 
-              <!-- 6. SPACING -->
-              <details class="style-accordion">
-                <summary>SPACING</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Letter Spacing: <span id="letterSpacingVal">0</span>px
-                    <input type="range" id="letterSpacingSlider" min="-5" max="15" value="0" />
-                  </label>
-                </div>
-              </details>
+            <!-- ── MOTION ── -->
+            <div class="inspector-panel hidden" data-panel="motion">
+              <div class="control-group">
+                <h4>Entry animation</h4>
+                <label class="style-label">
+                  Style
+                  <select id="soAnimationType">
+                    <option value="none">None</option>
+                    <option value="fade">Fade</option>
+                    <option value="pop">Pop</option>
+                    <option value="scale">Scale</option>
+                    <option value="zoom">Zoom</option>
+                    <option value="slide_up">Slide up</option>
+                    <option value="slide_down">Slide down</option>
+                    <option value="slide_left">Slide left</option>
+                    <option value="slide_right">Slide right</option>
+                    <option value="float">Float</option>
+                    <option value="flicker">Flicker</option>
+                    <option value="shake">Shake</option>
+                  </select>
+                </label>
+                <label class="style-label">
+                  Applies to
+                  <select id="soAnimationTarget">
+                    <option value="word">Each word</option>
+                    <option value="line">Whole line</option>
+                  </select>
+                </label>
+                <label class="style-label">
+                  Duration <output id="soAnimationDurationVal">240</output>ms
+                  <input type="range" id="soAnimationDuration" min="60" max="800" step="10" value="240" />
+                </label>
+              </div>
 
-              <!-- 7. EFFECTS -->
-              <details class="style-accordion">
-                <summary>EFFECTS</summary>
-                <div class="accordion-content">
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="strokeToggle" />
-                    <span>Enable Stroke border</span>
-                  </label>
-                  <label class="style-label">
-                    Stroke Color
-                    <div class="color-row">
-                      <input type="color" id="strokeColorPicker" value="#000000" />
-                      <span class="color-hex" id="strokeColorHex">#000000</span>
-                    </div>
-                  </label>
-                  <label class="style-label">
-                    Stroke Width: <span id="strokeWidthVal">0</span>px
-                    <input type="range" id="strokeWidthSlider" min="0" max="15" value="0" />
-                  </label>
-                </div>
-              </details>
+              <div class="control-group">
+                <h4>Highlight pop</h4>
+                <p class="control-hint">A quick bounce on each word as it is spoken.</p>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soPopEnabled" checked />
+                  <span>Pop on spoken word</span>
+                </label>
+                <label class="style-label">
+                  Pop amount <output id="soPopScaleVal">1.16</output>×
+                  <input type="range" id="soPopScale" min="1" max="1.6" step="0.02" value="1.16" />
+                </label>
+              </div>
 
-              <!-- 8. SHADOWS -->
-              <details class="style-accordion">
-                <summary>SHADOWS</summary>
-                <div class="accordion-content">
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="shadowToggle" checked />
-                    <span>Enable Drop Shadow</span>
-                  </label>
-                  <label class="style-label">
-                    Shadow Blur: <span id="shadowBlurVal">15</span>px
-                    <input type="range" id="shadowBlurSlider" min="0" max="30" value="15" />
-                  </label>
-                </div>
-              </details>
-              
-              <div class="canvas-bulk-tools">
-                <button class="style-btn" id="applyAllCoordsBtn">Apply to All Comps</button>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="lowResToggle" checked />
-                  <span>Low-res preview (Fast)</span>
+              <div class="control-group">
+                <h4>Reveal</h4>
+                <label class="style-label">
+                  Words on screen
+                  <select id="soReveal">
+                    <option value="all">Whole phrase</option>
+                    <option value="progressive">Appear as spoken</option>
+                  </select>
                 </label>
               </div>
             </div>
 
-            <!-- More Export Options -->
-            <div class="export-section">
-              <button class="export-main-btn" id="exportMainBtn">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Export MP4
-              </button>
-              <details class="more-exports">
-                <summary>More export options</summary>
-                <button class="export-alt-btn" id="exportSrtBtn">Download SRT</button>
-              </details>
+            <!-- ── EXPORT ── -->
+            <div class="inspector-panel hidden" data-panel="export">
+              <div class="control-group">
+                <h4>Video</h4>
+                <p class="control-hint">Captions are burned in at the source video's own resolution and frame rate.</p>
+                <button class="export-main-btn" id="exportMainBtn">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export MP4
+                </button>
+              </div>
+              <div class="control-group">
+                <h4>Subtitles</h4>
+                <button class="export-alt-btn" id="exportSrtBtn">Download .srt</button>
+              </div>
+              <div class="control-group">
+                <h4>Preview</h4>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="lowResToggle" checked />
+                  <span>Low-res preview (faster)</span>
+                </label>
+              </div>
             </div>
           </div>
         </aside>
       </div>
 
-      <!-- â”€â”€â”€ BOTTOM PANEL: Timeline Ruler & Blocks â”€â”€â”€ -->
+      <!-- --- BOTTOM PANEL: Timeline Ruler & Blocks --- -->
       <div class="timeline-bar" id="timelineBar">
         <!-- State 1: Locked Timeline Placeholder -->
         <div id="unloadedTimelineState" class="unloaded-timeline-state">
@@ -382,7 +442,7 @@
           <div class="timeline-header">
             <span class="timeline-label">Timeline</span>
             <div class="timeline-zoom">
-              <button class="zoom-btn" id="zoomOutBtn">â€”</button>
+              <button class="zoom-btn" id="zoomOutBtn" aria-label="Zoom out">&minus;</button>
               <span class="zoom-level" id="zoomLevel">100%</span>
               <button class="zoom-btn" id="zoomInBtn">+</button>
             </div>
@@ -445,8 +505,31 @@
     </div>
   </div>
 
-  <script src="/template-engine.js?v=2.0.1?v=2.0.1"></script>
-  <script src="/app.js?v=2.0.1?v=2.0.1"></script>
+  <!--
+    The caption renderer is loaded as a module straight from the server's own
+    source, so the preview is drawn by the exact same code that renders the
+    exported MP4 rather than a hand-synced browser copy.
+  -->
+  <script type="module">
+    import * as CaptionRenderer from '/renderer/caption-renderer.js';
+    import * as CaptionFonts from '/renderer/fonts.js';
+    import * as CaptionTemplates from '/renderer/templates.js';
+    import { applyStyleOverrides, sanitizeOverrides } from '/renderer/style-overrides.js';
+
+    CaptionRenderer.configureFonts({
+      fontString: CaptionFonts.fontString,
+      arabicFontString: (size) =>
+        `400 ${Math.round(size)}px "${CaptionFonts.ARABIC_FALLBACK_ALIAS}", sans-serif`
+    });
+
+    window.CaptionRenderer = CaptionRenderer;
+    window.CaptionFonts = CaptionFonts;
+    window.CaptionTemplates = CaptionTemplates;
+    window.applyStyleOverrides = applyStyleOverrides;
+    window.sanitizeOverrides = sanitizeOverrides;
+    window.dispatchEvent(new Event('caption-renderer-ready'));
+  </script>
+  <script src="/app.js?v=2.1.0"></script>
 </body>
 </html>
 

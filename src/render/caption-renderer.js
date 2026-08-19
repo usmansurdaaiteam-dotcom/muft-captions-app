@@ -915,6 +915,33 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, template
   return true;
 }
 
+/**
+ * Bounding box of the caption at a given time, in target pixels, or null.
+ *
+ * Exposed so the editor can position its selection outline and drag handles
+ * from the renderer's own layout instead of reimplementing the layout maths —
+ * a second copy would drift from what is actually drawn.
+ */
+export function getCaptionBounds(ctx, timeMs, compositions, tokenMap, template, width) {
+  const comp = findActiveComposition(compositions, timeMs);
+  if (!comp || !template) return null;
+
+  const scale = width / DESIGN_WIDTH;
+  const laid = layoutComposition(ctx, comp, tokenMap, template, scale);
+  if (!laid.words.length) return null;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const word of laid.words) {
+    const half = word.size * 0.62;
+    minX = Math.min(minX, word.x);
+    maxX = Math.max(maxX, word.x + word.width);
+    minY = Math.min(minY, word.y - half);
+    maxY = Math.max(maxY, word.y + half);
+  }
+
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY, compositionId: comp.id };
+}
+
 /** Convenience wrapper used by the exporter: clears then draws. */
 export function renderCaptionFrameClean(ctx, timeMs, compositions, tokenMap, template, width, height) {
   ctx.clearRect(0, 0, width, height);
