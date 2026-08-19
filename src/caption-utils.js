@@ -436,6 +436,54 @@ ${JSON.stringify(tokenData, null, 2)}`;
 }
 
 /**
+ * JSON Schema for the composition response.
+ *
+ * Passed to the Gemini API as `responseJsonSchema` so the reply is guaranteed to
+ * parse, rather than relying on the tolerant recovery parser below. That parser
+ * stays as a fallback: the cookie-based path returns free text, and a proxy that
+ * drives AI Studio may not honour a schema at all.
+ *
+ * Only the JSON Schema subset the API supports is used here: type, properties,
+ * required, items, enum, additionalProperties, propertyOrdering.
+ */
+export const V2_COMPOSITION_SCHEMA = {
+  type: 'object',
+  propertyOrdering: ['compositions'],
+  properties: {
+    compositions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        propertyOrdering: ['token_ids', 'hero_token_id', 'comp_type', 'cleaned_texts'],
+        properties: {
+          token_ids: {
+            type: 'array',
+            items: { type: 'integer' },
+            description: 'Token ids in this caption line, in spoken order.'
+          },
+          hero_token_id: {
+            type: 'integer',
+            description: 'Which of token_ids is the emphasised word.'
+          },
+          comp_type: {
+            type: 'string',
+            enum: ['emphasis', 'plain', 'spotlight']
+          },
+          cleaned_texts: {
+            type: 'object',
+            // Keys are token ids as strings, so the properties are not fixed.
+            additionalProperties: { type: 'string' },
+            description: 'Corrected text per token id. Only include changed tokens.'
+          }
+        },
+        required: ['token_ids', 'hero_token_id', 'comp_type']
+      }
+    }
+  },
+  required: ['compositions']
+};
+
+/**
  * Parse Gemini's V2 composition response and merge with token data.
  */
 export function parseV2CompositionResponse(geminiOutput, tokens) {

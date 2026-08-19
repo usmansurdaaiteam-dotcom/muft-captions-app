@@ -29,24 +29,72 @@ of these as environment variables to override.
 | `ACCESS_PASSWORD` | `muftcaptions2026` | The shared password for the team |
 | `REQUIRE_PASSWORD` | `true` | Set to `false` to remove the password gate entirely. Only do this when the app is not reachable from the internet. |
 | `SONIOX_API_KEY` | inline value | Speech-to-text key |
+| `GEMINI_API_BASE` | Google's API | Point at a Gemini-compatible proxy instead — see below |
 | `GEMINI_API_KEY` | *(unset)* | Strongly recommended — see below |
-| `GEMINI_API_MODEL` | `gemini-2.0-flash` | Model used for caption composition |
+| `GEMINI_API_MODEL` | `gemini-3.5-flash` | Model used for caption composition |
 
-### Why `GEMINI_API_KEY` matters
+## Caption composition
 
-Caption composition — deciding how words group into lines, which word to
-emphasise, and converting Urdu script to Roman Urdu — is done by Gemini.
+Grouping words into lines, choosing which word to emphasise, and converting Urdu
+script to Roman Urdu are all done by Gemini. Configure one of the two backends
+below — they take the same request shape, so the app supports either.
 
-Without a key, the app falls back to an unofficial path that authenticates with
-Google **session cookies**. Those cookies expire on their own after a few weeks.
-When they do, composition fails and the pipeline silently degrades: lines are
-grouped by pauses alone, the emphasised word becomes simply the longest word in
-the line, and Urdu is left in Urdu script. The editor now shows a warning when
-this happens, but the only real fix is a key.
+Run `npm run gemini:doctor` at any time to see what is actually configured, which
+models the backend offers, and how they compare on a real caption prompt.
 
-Get one from [Google AI Studio](https://aistudio.google.com/apikey) and set
-`GEMINI_API_KEY`. The cookie path stays as a fallback, so nothing breaks either
-way.
+### Option 1: AIStudioToAPI (no paid key)
+
+[AIStudioToAPI](https://github.com/iBUHub/AIStudioToAPI) drives a logged-in Google
+AI Studio session in a real browser and exposes Gemini-compatible endpoints. It
+needs no paid API key. Its default port is `7860`.
+
+```bash
+GEMINI_API_BASE=http://localhost:7860/v1beta
+GEMINI_API_KEY=your-api-key-1     # one of the API_KEYS you configured in it
+```
+
+Because it drives a web UI rather than the real API, it may not honour newer
+request options. The client detects that and retries with a simpler request
+rather than failing, so structured output and thinking controls degrade quietly
+instead of breaking composition.
+
+The set of models available through AI Studio differs from the public API — ask
+your instance with `npm run gemini:doctor`.
+
+### Option 2: Google's API
+
+Get a key from [Google AI Studio](https://aistudio.google.com/apikey), set
+`GEMINI_API_KEY`, and leave `GEMINI_API_BASE` unset.
+
+### Why configuring one matters
+
+With neither set, the app falls back to a hand-rolled client that talks to
+`gemini.google.com` using hardcoded Google **session cookies**. Those cookies
+expire on their own after a few weeks. When they do, composition does not error —
+it quietly degrades: lines are grouped by pauses alone, the emphasised word
+becomes simply the longest word in the line, and Urdu stays in Urdu script. The
+editor shows a warning when this happens, and the server says so at startup, but
+the real fix is to configure a backend.
+
+### Choosing a model
+
+| Model | Notes |
+| --- | --- |
+| `gemini-3.5-flash` | **Default.** Full Flash intelligence, available to at least 2027-05-19. |
+| `gemini-3.5-flash-lite` | Cheapest, longest guarantee (2027-07-21). Google positions Flash-Lite for translation and simple data processing, which is close to this task — worth comparing before paying for Flash. |
+| `gemini-3.7-flash` | Newest Flash, but flagged *short-term availability*: it can be retired about 45 days after a replacement ships. Only pick it if someone will keep this setting current. |
+| `gemini-3-flash-preview` | Has a free tier on Google's API, so useful for trying this without enabling billing. |
+| `gemini-3.1-pro-preview` | Far more capable than this task needs, several times the price, no free tier. Only if emphasis choices look poor on Flash. |
+
+`gemini-2.0-flash` and the rest of the 2.0 line **were retired on 2026-06-01** and
+now return 404. The client refuses them up front with an explanation rather than
+letting the request fail obscurely.
+
+Two Gemini 3 behaviours the client handles for you: temperature is left at its
+default, because Google advises against lowering it on Gemini 3 (it can cause
+looping and degraded output), and thinking is pinned to `low`, because Gemini 3
+otherwise defaults to `high` and spends latency and tokens reasoning about a task
+that does not need it.
 
 ## How it fits together
 
@@ -73,6 +121,7 @@ upload ──► Soniox ──────────► Gemini ─────
 | `src/render/style-overrides.js` | Applies style tweaks to a template |
 | `src/render/exporter.js` | Render jobs: queue, progress, cancellation |
 | `src/media/analyze.js` | Waveform and filmstrip generation for the timeline |
+| `src/gemini.js` | Gemini client and the model catalogue |
 | `src/languages.js` | Transcription languages |
 | `src/maintenance.js` | Disk usage reporting and cleanup |
 | `src/caption-utils.js` | Transcript normalisation, prompts, subtitle formats |
@@ -160,6 +209,8 @@ npm run test:all         # everything, including the browser tests
 
 npm run test:templates   # every template draws real ink, in frame, at 4 aspect ratios
 npm run test:styles      # a single line can be styled without affecting the others
+npm run test:gemini      # Gemini client against a stand-in backend: routing, auth,
+                         # structured output, retry-on-rejection, retired models
 npm run test:ui          # headless browser: preview renders, controls work, no leaks
 npm run test:wysiwyg     # the preview and the export agree on layout
 npm run test:export      # queue a real render and verify captions are in the pixels

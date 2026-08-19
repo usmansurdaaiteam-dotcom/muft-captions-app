@@ -13,8 +13,16 @@ import {
   parseV2CompositionResponse,
   compositionsToSrt,
   compositionsToVtt,
-  compositionsToText
+  compositionsToText,
+  V2_COMPOSITION_SCHEMA
 } from './src/caption-utils.js';
+import {
+  callGeminiApi,
+  verifyGeminiAccess,
+  GEMINI_MODELS,
+  DEFAULT_GEMINI_MODEL,
+  GOOGLE_API_BASE
+} from './src/gemini.js';
 import { getLanguage, listLanguages, DEFAULT_LANGUAGE_ID } from './src/languages.js';
 import {
   buildCompositions,
@@ -44,15 +52,21 @@ const SONIOX_API_KEY = process.env.SONIOX_API_KEY
 /**
  * Preferred path for the caption-composition step.
  *
- * The cookie-based Gemini web client below still works but depends on Google
- * session cookies, which expire on their own after a few weeks. When they do,
- * composition analysis fails and the pipeline silently falls back to picking
- * the longest word in each phrase and skips Roman-Urdu conversion entirely.
- * Setting GEMINI_API_KEY switches to the official API and removes that whole
- * failure mode.
+ * Two supported backends, both speaking the same request shape:
+ *
+ * - Google's API, with a key from https://aistudio.google.com/apikey
+ * - A Gemini-compatible proxy such as AIStudioToAPI, which drives a logged-in
+ *   AI Studio session. Point GEMINI_API_BASE at its /v1beta URL (default
+ *   http://localhost:7860/v1beta) and set GEMINI_API_KEY to one of its API_KEYS.
+ *
+ * Either removes the failure mode of the cookie-based web client further down,
+ * which depends on Google session cookies that expire on their own after a few
+ * weeks. When they do, composition fails and the pipeline falls back to picking
+ * the longest word in each phrase with no script conversion.
  */
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_API_MODEL = process.env.GEMINI_API_MODEL || 'gemini-2.0-flash';
+const GEMINI_API_BASE = process.env.GEMINI_API_BASE || GOOGLE_API_BASE;
+const GEMINI_API_MODEL = process.env.GEMINI_API_MODEL || DEFAULT_GEMINI_MODEL;
 const GEMINI_COOKIES = `__Secure-1PAPISID=V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC; __Secure-1PSID=g.a000_Qhw2T9OhwUGK_soDrogaS7yAXpa68w8k929b0koecsL6psiRabzPFhaHcZn73fDZl6GHgACgYKAboSARASFQHGX2Mi6qgmPYCHfwX7ZBC5qspWbBoVAUF8yKoG4h7LaZ3P1350mgx4IxiP0076; __Secure-1PSIDCC=AKEyXzXgcCUfjt0JQbEIJ-aSHFKvZQ5aLAZu9gdnLU5gWaaUgHWkK0VMfjfhiqQfx_oCM5hc; __Secure-1PSIDTS=sidts-CjEByojQU9rMv0KOJfOm-1h1AY-8T_B5QGNVa_HXMl0yDTogxlUw15fkKJr6q8efZPbkEAA; __Secure-3PAPISID=V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC; __Secure-3PSID=g.a000_Qhw2T9OhwUGK_soDrogaS7yAXpa68w8k929b0koecsL6psiJcikN6-d8p0qcRLXJseMbgACgYKAYcSARASFQHGX2MibiloPeTjOwf_c4ITNHKsQRoVAUF8yKqvBQaWkh9YDuXdOTnFJvyk0076; __Secure-3PSIDCC=AKEyXzXP_qVnzywb4q1RBazyy42fyc10uo3LVEEessv0LXE-pV3Zz8viniEVwseza0EropKGsA; __Secure-3PSIDTS=sidts-CjEByojQU9rMv0KOJfOm-1h1AY-8T_B5QGNVa_HXMl0yDTogxlUw15fkKJr6q8efZPbkEAA; _ga=GA1.1.1235861555.1781907535; _ga_BF8Q35BMLM=GS2.1.s1781907535$o1$g1$t1781907537$j58$l0$h0; _ga_WC57KJ50ZZ=GS2.1.s1781907535$o1$g1$t1781907549$j46$l0$h0; _gcl_au=1.1.1725113739.1781907535; APISID=nzDM-ZU4Gjo25lRP/ASMpwLO3Av3WUJreD; COMPASS=gemini-pd=CjwACWuJV93jFYb_b6k1ZbZc5AVi75OXfwVJx6huPFdJgLZgT-iphNSBtyIyTho-2Gurv4U86El7hPmdVFUQzqPc0QYaZgAJa4lX3m9vZsmI6QCgE9yrrbqnT-F_4Be9ffLz_hJnaVJuLoKujHVLrcWURyjXXkDC9BOAOs4u0MyYa17Ls82BAQ_52wOSXejtkKpYLWPS4jjvCXpw8oLZHpNUblsq59rRO7JDiyABMAE; HSID=AdTEr0K3d0enQTv13; NID=532=ilgUIr_tSLbp6cjkHuxdsdYCHK5KyOwSuTlB_CGeUk2X5IBlMjbOahvyKKqSTRescfVA24MUAFTnrhdhMpP2XuSEMJsPtwd2z-2c3DeE1BusyHFj3GBxBKw-c-dv41obw4svN8wXYNKV14iJdECVJUxf7_dTgOyIs5M7K8j_TgruZlvKUa8Se_cKHN_iPaekzG6lyb9nyn7OFwHoScPkwrh1kx6M2BdqO-o93q-AmqaG-1FWW9WN12dU74vcQDKH2pCZFgHkHxwST-Q2tkzQQxxizrglPASqACWS1lC2gXbkrMOjyL5JXyqiA3nRVGtz1qhP19bKLAQqlYUVBAnBAHLPHYI6WBn5XS4IdAu3BN0RHG10BsgT_G3nN19Pj24X3QYg433AYZHkBUzIPNborIW6-MzdtMyYnKJLsIJ2fsP7R-ZKwExd1efirFa7KbwHidK8CHZDHl522U6mKPysy2edorWKL9fGuxen5qARabfCjI-Y2kHZKnpDMP-jVe7bEt500F6KHCtjbnVpN_cILIo62aC79vFxHTcusbgqbXWzXEuJKjsledTUuyMlaZa3J8asJAHH05C0_hH0D49XB9lMA3xq1aJENm3OI6YKz4FkZPQrCARxs3dyhGS7p9Bg; S=billing-ui-v3=0djzWSEegPZhH7bKNoYUVc-6GlC2uLa9wAMRmod-_68:billing-ui-v3-efe=0djzWSEegPZhH7bKNoYUVc-6GlC2uLa9wAMRmod-_68; SAPISID=V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC; SID=g.a000_Qhw2T9OhwUGK_soDrogaS7yAXpa68w8k929b0koecsL6psimdmBj2gZ8tIgJEUXMZysgwACgYKAS4SARASFQHGX2MiriaKGwynhWbVnUjkP7cC_xoVAUF8yKobAl95iI4nuPoc9KCLZ-yd0076; SIDCC=AKEyXzVA2tYqrZj9gjGXdxkd_SvYrYFb0zFCdihqnfV6f6JGQRt_aT0OyvlX1dS1KPXd4Bs6; SSID=AYiY2HTNnjtEVRTMa`;
 const GEMINI_SAPISID = 'V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC';
 
@@ -112,40 +126,23 @@ function extractResponseText(raw) {
   throw new Error('No response text found in Gemini reply.');
 }
 
-/** Official Gemini API. Used whenever GEMINI_API_KEY is configured. */
-async function callGeminiApi(prompt) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_API_MODEL}:generateContent`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': GEMINI_API_KEY
-    },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: 8192 }
-    })
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Gemini API error ${response.status}: ${detail.slice(0, 300)}`);
-  }
-
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('');
-  if (!text) throw new Error('Gemini API returned no text.');
-  return text;
-}
-
 /**
- * Ask Gemini to analyse captions, preferring the API key and falling back to
- * the cookie-based web client so existing deployments keep working unchanged.
+ * Ask Gemini to analyse captions, preferring the configured API and falling back
+ * to the cookie-based web client so existing deployments keep working unchanged.
+ *
+ * @param {string} prompt
+ * @param {object|null} schema optional response schema for structured output
  */
-async function callGemini(prompt) {
+async function callGemini(prompt, schema = null) {
   if (GEMINI_API_KEY) {
     try {
-      return await callGeminiApi(prompt);
+      const result = await callGeminiApi(prompt, {
+        apiKey: GEMINI_API_KEY,
+        model: GEMINI_API_MODEL,
+        base: GEMINI_API_BASE,
+        schema
+      });
+      return result.text;
     } catch (err) {
       console.warn(`[gemini] API call failed (${err.message}); falling back to web client.`);
     }
@@ -554,7 +551,7 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         console.log(`[V2] Gemini attempt ${attempt}...`);
-        const geminiReply = await callGemini(geminiPrompt);
+        const geminiReply = await callGemini(geminiPrompt, V2_COMPOSITION_SCHEMA);
         console.log(`[V2] Gemini responded (${geminiReply.length} chars). Parsing compositions...`);
         const parsed = parseV2CompositionResponse(geminiReply, tokens);
         updatedTokens = parsed.tokens;
@@ -873,6 +870,24 @@ app.get('/api/languages', (req, res) => {
   res.json({ languages: listLanguages(), defaultLanguage: DEFAULT_LANGUAGE_ID });
 });
 
+// ─── Caption AI status ──────────────────────────────────────────────────────────
+
+/**
+ * Whether the composition step is properly configured.
+ *
+ * Worth exposing because the failure is otherwise invisible: without a working
+ * API the pipeline still produces captions, just noticeably worse ones.
+ */
+app.get('/api/gemini/status', checkAuth, async (req, res) => {
+  const access = await verifyGeminiAccess(GEMINI_API_KEY, GEMINI_API_MODEL, GEMINI_API_BASE);
+  res.json({
+    ...access,
+    usingCookieFallback: !access.ok,
+    recommendedModels: GEMINI_MODELS,
+    defaultModel: DEFAULT_GEMINI_MODEL
+  });
+});
+
 /**
  * POST /api/export-text
  * Subtitle and transcript formats, generated from the same composition data the
@@ -992,8 +1007,40 @@ app.get('/api/export/:id/download', checkAuth, (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n  ┌─────────────────────────────────────────┐`);
-  console.log(`  │  Muft Captions V2 — Caption Editor      │`);
-  console.log(`  │  http://localhost:${PORT}                    │`);
+  console.log(`  │  Muft Captions — Caption Editor         │`);
+  console.log(`  │  http://localhost:${PORT}${' '.repeat(Math.max(0, 20 - String(PORT).length))}│`);
   console.log(`  └─────────────────────────────────────────┘\n`);
+  reportCaptionAiStatus();
 });
+
+/**
+ * Say plainly at startup whether the composition step will work.
+ *
+ * A misconfigured model does not stop the app; captions still get produced, just
+ * with guessed emphasis and no script conversion. That is easy to miss for weeks,
+ * so it is checked once here instead of being discovered at the first upload.
+ */
+async function reportCaptionAiStatus() {
+  if (!GEMINI_API_KEY) {
+    console.warn(
+      '[gemini] No GEMINI_API_KEY set — falling back to the cookie-based web client.\n' +
+      '         Those cookies expire on their own, and when they do, emphasis words are\n' +
+      '         guessed and script conversion stops. Point GEMINI_API_BASE at an\n' +
+      '         AIStudioToAPI instance, or use a key from https://aistudio.google.com/apikey'
+    );
+    return;
+  }
+
+  const access = await verifyGeminiAccess(GEMINI_API_KEY, GEMINI_API_MODEL, GEMINI_API_BASE);
+  if (access.ok) {
+    console.log(`[gemini] Ready: ${access.model} via ${access.backend === 'proxy' ? access.base : 'Google'}.`);
+    return;
+  }
+
+  console.warn(`[gemini] Not usable: ${access.reason}`);
+  if (access.available?.length) {
+    console.warn(`[gemini] Available here: ${access.available.slice(0, 12).join(', ')}`);
+  }
+  console.warn('[gemini] Run "npm run gemini:doctor" for details. Captions will use the cookie fallback.');
+}
 
