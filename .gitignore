@@ -25,3 +25,6 @@ configs/
 
 # Uploaded fonts belong to the install, not the repo.
 assets/fonts/custom/
+
+# One-off download bundles, never committed.
+public/download/

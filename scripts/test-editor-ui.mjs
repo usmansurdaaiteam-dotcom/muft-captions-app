@@ -57,7 +57,19 @@ async function captionInk(page) {
 
 // These tests edit captions and styles as part of what they check, so the
 // fixtures are rebuilt first to keep runs comparable.
-await execFileAsync('node', [path.join(SCRIPTS, 'make-fixtures.mjs')], { maxBuffer: 16 * 1024 * 1024 });
+//
+// Only possible for a server running from this same checkout: the rebuild writes
+// to ./projects here, which is not what a server elsewhere is reading. Pointed at
+// another install, the run continues against whatever state that install has —
+// which previously looked like a real failure of find-and-replace when the
+// fixtures there had already been edited by an earlier run.
+const targetIsLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(BASE);
+if (targetIsLocal) {
+  await execFileAsync('node', [path.join(SCRIPTS, 'make-fixtures.mjs')], { maxBuffer: 16 * 1024 * 1024 });
+} else {
+  console.log(`Note: ${BASE} is not this checkout, so its fixtures are left as they are.`);
+  console.log('      Run "npm run fixtures" there first if a caption-editing check fails.\n');
+}
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
