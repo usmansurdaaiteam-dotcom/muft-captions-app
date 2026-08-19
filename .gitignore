@@ -22,3 +22,6 @@ template-contact-sheet.png
 Thumbs.db
 cache/
 configs/
+
+# Uploaded fonts belong to the install, not the repo.
+assets/fonts/custom/

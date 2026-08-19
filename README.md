@@ -6,17 +6,41 @@ captions burned in.
 
 ## Running it
 
+### On GitHub, with no local setup
+
+Open the repository on GitHub, press **`.`**-adjacent **Code → Codespaces → Create
+codespace**. The devcontainer installs FFmpeg and the dependencies, creates two
+sample projects, and forwards port 3000. Then:
+
+```bash
+npm start
+```
+
+The password gate is off in a Codespace, since the URL is already private to you.
+Everything except generating new captions works without credentials — the editor,
+all 35 templates, the timeline, and MP4 export all run on the sample projects.
+
+### Locally
+
 ```bash
 npm install
-npm run fonts     # first run only: downloads the caption fonts
 npm start         # http://localhost:3000
 ```
 
-FFmpeg and FFprobe must be on the `PATH` — they do the video work.
+FFmpeg and FFprobe must be on the `PATH` — they do all the video work: transcode,
+waveform, filmstrip, thumbnails, and the final burn-in.
 
-`npm run fonts` needs `python3` with `fonttools` (`pip install fonttools`)
-because most Google Fonts now ship as variable fonts and have to be instanced
-down to static weights. See [Fonts](#fonts) for why.
+The caption fonts are committed, so there is nothing to download on a first run.
+`npm run fonts` only exists to regenerate them, and that needs `python3` with
+`fonttools` — most Google Fonts now ship as variable fonts and have to be
+instanced down to static weights. See [Fonts](#fonts) for why that matters.
+
+Starting without a `.env` works: the editor and export are fully usable, and the
+server says plainly that transcription and composition are not configured.
+
+```bash
+npm run fixtures   # sample projects, if you want something to open
+```
 
 ## Configuration
 

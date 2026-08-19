@@ -1,0 +1,26 @@
+{
+  "name": "Muft Captions",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Muft Captions",
+      "onAutoForward": "openBrowser"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint"]
+    }
+  },
+
+  "remoteEnv": {
+    // Codespaces URLs are unguessable and per-user, so the password gate adds
+    // nothing there and only gets in the way of a quick look.
+    "REQUIRE_PASSWORD": "false"
+  }
+}
