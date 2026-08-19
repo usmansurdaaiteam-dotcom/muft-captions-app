@@ -9,10 +9,13 @@
     "fonts": "node scripts/fetch-fonts.mjs",
     "check": "node --check server.js && node --check public/app.js && node --check src/caption-utils.js && node --check src/composition-engine.js",
     "test:templates": "node scripts/check-templates.mjs",
+    "test:styles": "node scripts/check-per-line-styles.mjs",
     "test:export": "node scripts/test-export.mjs",
     "test:ui": "node scripts/test-editor-ui.mjs",
     "test:wysiwyg": "node scripts/test-wysiwyg.mjs",
-    "test": "npm run check && npm run test:templates",
+    "test": "npm run check && npm run test:templates && npm run test:styles",
+    "test:all": "npm test && npm run test:ui && npm run test:wysiwyg && npm run test:export",
+    "fixtures": "node scripts/make-fixtures.mjs",
     "preview:templates": "node scripts/preview-templates.mjs"
   },
   "dependencies": {

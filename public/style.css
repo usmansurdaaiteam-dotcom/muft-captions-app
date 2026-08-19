@@ -2303,3 +2303,234 @@ textarea:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ═══════════════════ FIND AND REPLACE ═══════════════════ */
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.icon-btn:hover { color: var(--text); border-color: var(--border-light); }
+.icon-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+
+.find-replace {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.find-replace.hidden { display: none; }
+
+.find-replace-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.find-replace-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.find-replace-row input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.find-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.find-replace-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.find-option {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.find-replace-actions .style-btn {
+  flex: 1;
+  padding: 7px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.find-replace-actions .style-btn:hover { background: var(--accent); color: #111; }
+
+.find-replace-actions .style-btn.ghost {
+  background: transparent;
+  border-color: var(--border-light);
+  color: var(--text-muted);
+}
+
+.find-replace-actions .style-btn.ghost:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* ═══════════════════ UPLOAD OPTIONS ═══════════════════ */
+
+.upload-option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.upload-option select {
+  padding: 9px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.upload-option select:focus { outline: none; border-color: var(--accent); }
+
+/* ═══════════════════ EXPORT FORMATS ═══════════════════ */
+
+.export-format-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+/* ═══════════════════ FONT UPLOAD ═══════════════════ */
+
+.font-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.font-upload-btn {
+  display: block;
+  text-align: center;
+  cursor: pointer;
+}
+
+/* ═══════════════════ DISK USAGE WIDGET ═══════════════════ */
+
+.usage-projects {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.upgrade-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.usage-item.hidden { display: none; }
+
+/* ═══════════════════ STYLE SCOPE SWITCH ═══════════════════ */
+
+.scope-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.scope-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.scope-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.scope-btn {
+  padding: 7px 4px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.scope-btn:hover { color: var(--text); border-color: var(--border-light); }
+
+.scope-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scope-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.scope-hint.hidden { display: none; }

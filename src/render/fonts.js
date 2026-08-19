@@ -23,6 +23,10 @@ const PREFIX = 'mc';
  * Every available font file.
  * `family` + `weight` is what templates and the UI refer to; `file` is the
  * actual TTF in assets/fonts/.
+ *
+ * Mutable so uploaded fonts can be added at runtime. Both the browser and the
+ * server register the same custom list, which keeps a custom font resolving to
+ * the same file in the preview and in the export.
  */
 export const FONT_FILES = [
   { family: 'Inter', weight: 500, file: 'Inter-Medium.ttf' },
@@ -70,19 +74,47 @@ export const ARABIC_FALLBACK_ALIAS = aliasFor('Noto Sans Arabic', 700);
 
 /** Stable canvas/CSS font-family name for one font file. */
 export function aliasFor(family, weight) {
-  return `${PREFIX}-${family.replace(/\s+/g, '')}-${weight}`;
+  // Strip anything that would need escaping in a CSS font-family name.
+  return `${PREFIX}-${family.replace(/[^\w]+/g, '')}-${weight}`;
+}
+
+/**
+ * Add uploaded fonts to the registry.
+ *
+ * Called on the server at startup and in the browser once the font list has
+ * been fetched, so both resolve a custom family to the same file. Replacing an
+ * existing entry rather than appending keeps repeat calls idempotent.
+ */
+export function registerCustomFonts(entries = []) {
+  for (const entry of entries) {
+    if (!entry || !entry.family || !entry.file) continue;
+    const weight = Number(entry.weight) || 400;
+    const existing = FONT_FILES.findIndex(f => f.family === entry.family && f.weight === weight);
+    const record = { family: entry.family, weight, file: entry.file, custom: true };
+    if (existing >= 0) FONT_FILES[existing] = record;
+    else FONT_FILES.push(record);
+  }
+  return FONT_FILES.length;
+}
+
+/** Where a font file lives relative to the fonts directory. */
+export function relativePathFor(font) {
+  return font.custom ? `custom/${font.file}` : font.file;
 }
 
 /** All distinct families, with their available weights, for the font picker. */
 export function listFamilies() {
   const byFamily = new Map();
   for (const font of FONT_FILES) {
-    if (!byFamily.has(font.family)) byFamily.set(font.family, []);
-    byFamily.get(font.family).push(font.weight);
+    if (!byFamily.has(font.family)) byFamily.set(font.family, { weights: [], custom: false });
+    const entry = byFamily.get(font.family);
+    entry.weights.push(font.weight);
+    if (font.custom) entry.custom = true;
   }
-  return [...byFamily.entries()].map(([family, weights]) => ({
+  return [...byFamily.entries()].map(([family, entry]) => ({
     family,
-    weights: weights.sort((a, b) => a - b)
+    weights: entry.weights.sort((a, b) => a - b),
+    custom: entry.custom
   }));
 }
 
@@ -128,10 +160,11 @@ export function fontString(family, weight, sizePx) {
 export function buildFontFaceCss(baseUrl = '/assets/fonts') {
   return FONT_FILES.map(font => {
     const alias = aliasFor(font.family, font.weight);
+    const format = /\.otf$/i.test(font.file) ? 'opentype' : 'truetype';
     return [
       '@font-face {',
       `  font-family: "${alias}";`,
-      `  src: url("${baseUrl}/${font.file}") format("truetype");`,
+      `  src: url("${baseUrl}/${encodeURI(relativePathFor(font))}") format("${format}");`,
       '  font-weight: 400;',
       '  font-style: normal;',
       '  font-display: block;',

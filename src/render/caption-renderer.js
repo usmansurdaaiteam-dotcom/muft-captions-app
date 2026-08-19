@@ -19,6 +19,8 @@
  * preview and in a 4K export.
  */
 
+import { applyStyleOverrides } from './style-overrides.js';
+
 // ─── Design space ───────────────────────────────────────────────────────────────
 
 export const DESIGN_WIDTH = 1080;
@@ -284,6 +286,7 @@ const LAYOUT_CACHE_LIMIT = 400;
 
 export function clearLayoutCache() {
   layoutCache.clear();
+  effectiveTemplateCache.clear();
 }
 
 function cacheGet(key) {
@@ -838,6 +841,28 @@ function drawWord(ctx, word, style, template, scale, anim) {
 
 // ─── Main entry ─────────────────────────────────────────────────────────────────
 
+/**
+ * A composition may carry its own style overrides so one line can be styled
+ * differently from the rest. Resolving that produces a new template object, so
+ * the result is memoised — otherwise it would be rebuilt for every frame the
+ * composition is on screen.
+ */
+const effectiveTemplateCache = new Map();
+
+function effectiveTemplateFor(comp, template) {
+  const overrides = comp && comp.styleOverrides;
+  if (!overrides || !Object.keys(overrides).length) return template;
+
+  const key = `${template.id}:${comp.id}:${JSON.stringify(overrides)}`;
+  let resolved = effectiveTemplateCache.get(key);
+  if (!resolved) {
+    resolved = applyStyleOverrides(template, overrides);
+    if (effectiveTemplateCache.size > 200) effectiveTemplateCache.clear();
+    effectiveTemplateCache.set(key, resolved);
+  }
+  return resolved;
+}
+
 /** The composition that should be on screen at a given time, or null. */
 export function findActiveComposition(compositions, timeMs) {
   if (!Array.isArray(compositions)) return null;
@@ -859,10 +884,11 @@ export function findActiveComposition(compositions, timeMs) {
  * @param {number} width target width in pixels
  * @param {number} height target height in pixels
  */
-export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, template, width, height) {
+export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, baseTemplate, width, height) {
   const comp = findActiveComposition(compositions, timeMs);
-  if (!comp || !template) return false;
+  if (!comp || !baseTemplate) return false;
 
+  const template = effectiveTemplateFor(comp, baseTemplate);
   const scale = Math.min(width, height) / DESIGN_WIDTH;
   const laid = layoutComposition(ctx, comp, tokenMap, template, width, height);
   if (!laid.words.length) return false;
@@ -939,10 +965,11 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, template
  * from the renderer's own layout instead of reimplementing the layout maths —
  * a second copy would drift from what is actually drawn.
  */
-export function getCaptionBounds(ctx, timeMs, compositions, tokenMap, template, width, height) {
+export function getCaptionBounds(ctx, timeMs, compositions, tokenMap, baseTemplate, width, height) {
   const comp = findActiveComposition(compositions, timeMs);
-  if (!comp || !template) return null;
+  if (!comp || !baseTemplate) return null;
 
+  const template = effectiveTemplateFor(comp, baseTemplate);
   const laid = layoutComposition(ctx, comp, tokenMap, template, width, height);
   if (!laid.words.length) return null;
 

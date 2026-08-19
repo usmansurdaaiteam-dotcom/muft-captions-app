@@ -69,9 +69,13 @@ upload ──► Soniox ──────────► Gemini ─────
 | `src/render/caption-renderer.js` | The renderer. Used by both the preview and the export. |
 | `src/render/templates.js` | The template catalogue, as data |
 | `src/render/fonts.js` | Font registry, shared by browser and server |
-| `src/render/style-overrides.js` | Applies per-project style tweaks to a template |
+| `src/render/custom-fonts.js` | Uploaded fonts: validation and storage |
+| `src/render/style-overrides.js` | Applies style tweaks to a template |
 | `src/render/exporter.js` | Render jobs: queue, progress, cancellation |
-| `src/caption-utils.js` | Transcript normalisation and prompt building |
+| `src/media/analyze.js` | Waveform and filmstrip generation for the timeline |
+| `src/languages.js` | Transcription languages |
+| `src/maintenance.js` | Disk usage reporting and cleanup |
+| `src/caption-utils.js` | Transcript normalisation, prompts, subtitle formats |
 | `src/composition-engine.js` | Grouping words into compositions |
 | `public/` | The editor UI (vanilla JS, no build step) |
 
@@ -114,6 +118,26 @@ Sizes are authored against a 1080×1920 canvas and scale to whatever the output
 is. Author generously: a phrase that would overflow its line budget is shrunk
 automatically, so a large size just means "as big as this phrase allows".
 
+Sizes scale with the frame's **shorter side**, while horizontal extents follow
+its width and the vertical anchor follows its height. That is what makes one
+template work at 9:16, 1:1 and 16:9 without editing.
+
+### Styling on top of a template
+
+A project stores a template id plus a flat set of overrides, and a single caption
+line can carry its own overrides that layer on top. The **Text** tab's scope
+switch chooses which of the two an edit is written to. Overrides are applied by
+one shared module, so the editor and the exporter derive the same template from
+the same data.
+
+### Custom fonts
+
+Upload a `.ttf` or `.otf` from the Text tab. WOFF and WOFF2 are rejected on
+purpose: they load in the browser but not in the export rasteriser, so a caption
+would preview in the uploaded font and export in a fallback. Uploads are also
+checked by their file header rather than their extension, and refused if they
+would shadow a built-in family name.
+
 ### Fonts
 
 Each font weight is a separate static file registered under its own alias
@@ -131,30 +155,49 @@ instances variable sources into real static weights to make that possible.
 ## Tests
 
 ```bash
-npm test                 # syntax + the whole template catalogue
-npm run test:templates   # every template draws real ink, in frame, no missing fonts
+npm test                 # syntax, the template catalogue, per-line styling
+npm run test:all         # everything, including the browser tests
+
+npm run test:templates   # every template draws real ink, in frame, at 4 aspect ratios
+npm run test:styles      # a single line can be styled without affecting the others
 npm run test:ui          # headless browser: preview renders, controls work, no leaks
 npm run test:wysiwyg     # the preview and the export agree on layout
 npm run test:export      # queue a real render and verify captions are in the pixels
 npm run preview:templates  # contact sheet of the catalogue as a PNG
 ```
 
-The UI, WYSIWYG and export tests need a running server and a video in
-`uploads/`. They default to `http://localhost:3111`:
+The UI, WYSIWYG and export tests need a running server. They default to
+`http://localhost:3111` and create their own fixtures:
 
 ```bash
 PORT=3111 npm start
-npm run test:ui
+npm run test:all
 ```
+
+`npm run fixtures` builds the sample video and projects on its own. The browser
+test rebuilds them each run, because it edits captions and styles as part of what
+it verifies and would otherwise leave the fixtures altered.
+
+The WYSIWYG test is worth keeping honest: it is what caught the preview using a
+fallback font (canvas does not trigger `@font-face` loading the way DOM text
+does) and glow rendering differently in each engine.
+
+## Housekeeping
+
+The sidebar shows real disk usage for this install. **Free up space** removes
+finished exports, uploaded videos no project refers to any more, and stale
+timeline caches. Waveforms and filmstrips regenerate on demand, so clearing them
+costs only the time to rebuild.
 
 ## Known limits
 
 - **Single tenant.** One shared password, and projects are JSON files in
   `projects/` with no per-user separation. Fine for an internal team; a real
   database would be needed for accounts.
-- **`uploads/` grows without bound.** Source videos are kept until their project
-  is deleted, and nothing prunes them. Watch the disk.
 - **One render at a time.** Exports are queued deliberately; a render saturates
   CPU and memory.
-- **Transcription is English + Urdu.** The language hints are fixed; there is no
-  language picker yet.
+- **No reframing.** The preview and export follow the source video's aspect
+  ratio. Templates adapt to any ratio, but the app will not crop or letterbox a
+  landscape video into a vertical frame for you.
+- **The editor is desktop-only.** There is no responsive layout for small
+  screens.

@@ -11,8 +11,11 @@ import {
   prepareTokensForV2,
   makeV2CompositionPrompt,
   parseV2CompositionResponse,
-  compositionsToSrt
+  compositionsToSrt,
+  compositionsToVtt,
+  compositionsToText
 } from './src/caption-utils.js';
+import { getLanguage, listLanguages, DEFAULT_LANGUAGE_ID } from './src/languages.js';
 import {
   buildCompositions,
   buildFallbackCompositions,
@@ -20,7 +23,9 @@ import {
 } from './src/composition-engine.js';
 import { registerFonts } from './src/render/fonts-node.js';
 import { getTemplate, listTemplates, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID } from './src/render/templates.js';
-import { listFamilies, buildFontFaceCss } from './src/render/fonts.js';
+import { listFamilies, buildFontFaceCss, FONT_FILES } from './src/render/fonts.js';
+import { loadCustomFonts, addCustomFont, removeCustomFont } from './src/render/custom-fonts.js';
+import { getStorageReport, runCleanup } from './src/maintenance.js';
 import { applyStyleOverrides, sanitizeOverrides } from './src/render/style-overrides.js';
 import { startExport, getJob, cancelJob, getVideoInfo } from './src/render/exporter.js';
 import {
@@ -235,7 +240,14 @@ const upload = multer({
   limits: { fileSize: 1024 * 1024 * 700 }
 });
 
+// Fonts are held in memory so they can be validated before anything is written.
+const fontUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024 * 12 }
+});
+
 registerFonts();
+await loadCustomFonts();
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -397,7 +409,33 @@ app.post('/api/templates/:id/resolve', (req, res) => {
 });
 
 app.get('/api/fonts', (req, res) => {
-  res.json({ families: listFamilies() });
+  res.json({ families: listFamilies(), custom: FONT_FILES.filter(f => f.custom) });
+});
+
+/**
+ * POST /api/fonts
+ * Upload a font and make it available to templates straight away.
+ */
+app.post('/api/fonts', checkAuth, fontUpload.single('font'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No font file was uploaded.' });
+    const entry = await addCustomFont(
+      req.file.buffer,
+      req.file.originalname || 'font.ttf',
+      req.body.family,
+      req.body.weight
+    );
+    console.log(`[fonts] Added custom font "${entry.family}" (${entry.label}).`);
+    res.json({ font: entry, families: listFamilies() });
+  } catch (error) {
+    res.status(400).json({ error: error?.message || 'Could not add that font.' });
+  }
+});
+
+app.delete('/api/fonts/:family/:weight', checkAuth, async (req, res) => {
+  const removed = await removeCustomFont(req.params.family, req.params.weight);
+  if (!removed) return res.status(404).json({ error: 'That font is not installed.' });
+  res.json({ success: true, families: listFamilies() });
 });
 
 // ─── V2 Endpoints ───────────────────────────────────────────────────────────────
@@ -456,7 +494,8 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
     }
 
     // Step 1: Soniox Transcription
-    console.log('[V2] Step 1: Soniox transcription...');
+    const language = getLanguage(req.body.language || DEFAULT_LANGUAGE_ID);
+    console.log(`[V2] Step 1: Soniox transcription (${language.label})...`);
     const media = await readFile(audioPath);
     const client = new SonioxNodeClient({ api_key: SONIOX_API_KEY });
     const transcription = await client.stt.transcribe({
@@ -464,17 +503,21 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
       file: media,
       filename: audioFilename,
       wait: true,
-      language_hints: ['en', 'ur'],
+      // Hints come from the chosen language rather than being fixed to
+      // English and Urdu, which mis-transcribed anything else.
+      ...(language.hints.length ? { language_hints: language.hints } : {}),
       enable_language_identification: true,
       enable_speaker_diarization: false,
       context: {
         general: [
-          { key: 'domain', value: 'AI creator explainer videos' },
-          { key: 'speech_style', value: 'Pakistani bilingual English and Urdu code-switching' },
-          { key: 'caption_goal', value: 'Keep English as English and Urdu as Urdu for later Roman Urdu conversion' }
+          { key: 'domain', value: 'creator explainer videos' },
+          { key: 'speech_style', value: language.label },
+          { key: 'caption_goal', value: 'Preserve the spoken words and their timing for captioning' }
         ],
         terms: preserveTerms,
-        text: 'The speaker is a Pakistani AI content creator. He often switches between English and Urdu in the same sentence. Preserve AI tool names and creator vocabulary exactly.'
+        text: language.romanize
+          ? 'The speaker mixes languages within a sentence. Preserve tool and brand names exactly.'
+          : 'A creator speaking to camera. Preserve tool and brand names exactly.'
       }
     });
 
@@ -500,7 +543,7 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
 
     // Step 3: Send to Gemini for composition analysis
     console.log('[V2] Step 3: Gemini composition analysis...');
-    const geminiPrompt = makeV2CompositionPrompt(tokens, { preserveTerms });
+    const geminiPrompt = makeV2CompositionPrompt(tokens, { preserveTerms, language });
     console.log(`[V2] Gemini prompt size: ${(geminiPrompt.length / 1024).toFixed(1)}KB`);
     let compositions;
     let updatedTokens = tokens;
@@ -703,7 +746,17 @@ app.post('/api/projects/:id', checkAuth, async (req, res) => {
       createdAt: incoming.createdAt || Date.now(),
       updatedAt: Date.now(),
       tokens: Array.isArray(incoming.tokens) ? incoming.tokens : [],
-      compositions: Array.isArray(incoming.compositions) ? incoming.compositions : [],
+      // A composition may carry its own style overrides; those are filtered to
+      // known keys too, so a project file cannot accumulate arbitrary data.
+      compositions: (Array.isArray(incoming.compositions) ? incoming.compositions : []).map(comp => {
+        if (!comp || !comp.styleOverrides) return comp;
+        const clean = sanitizeOverrides(comp.styleOverrides);
+        if (!Object.keys(clean).length) {
+          const { styleOverrides, ...rest } = comp;
+          return rest;
+        }
+        return { ...comp, styleOverrides: clean };
+      }),
       templateId: resolveTemplateId(incoming.templateId),
       styleOverrides: sanitizeOverrides(incoming.styleOverrides)
     };
@@ -756,20 +809,78 @@ app.post('/api/recompute-composition', checkAuth, async (req, res) => {
   }
 });
 
-/**
- * POST /api/export-srt
- * Generate SRT from compositions (fallback export).
- */
-app.post('/api/export-srt', checkAuth, async (req, res) => {
+// ─── Storage ────────────────────────────────────────────────────────────────────
+
+const STORAGE_DIRS = () => ({
+  uploadsDir: UPLOADS_DIR,
+  projectsDir: PROJECTS_DIR,
+  cacheDir: CACHE_DIR
+});
+
+app.get('/api/storage', checkAuth, async (req, res) => {
   try {
-    const { compositions, tokens } = req.body;
+    res.json(await getStorageReport(STORAGE_DIRS()));
+  } catch (error) {
+    res.status(500).json({ error: error?.message || 'Could not read storage usage.' });
+  }
+});
+
+app.post('/api/storage/cleanup', checkAuth, async (req, res) => {
+  try {
+    const removed = await runCleanup({ ...STORAGE_DIRS(), manual: true });
+    console.log(
+      `[cleanup] removed ${removed.exports} export(s), ${removed.orphans} orphan(s), ` +
+      `${removed.cache} cache file(s), freeing ${(removed.bytes / 1024 / 1024).toFixed(1)} MB`
+    );
+    res.json({ removed, storage: await getStorageReport(STORAGE_DIRS()) });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || 'Cleanup failed.' });
+  }
+});
+
+app.get('/api/languages', (req, res) => {
+  res.json({ languages: listLanguages(), defaultLanguage: DEFAULT_LANGUAGE_ID });
+});
+
+/**
+ * POST /api/export-text
+ * Subtitle and transcript formats, generated from the same composition data the
+ * video render uses so every format stays in step with the edits.
+ */
+const TEXT_FORMATS = {
+  srt: { extension: 'srt', mime: 'application/x-subrip', build: compositionsToSrt },
+  vtt: { extension: 'vtt', mime: 'text/vtt', build: compositionsToVtt },
+  txt: {
+    extension: 'txt',
+    mime: 'text/plain',
+    build: (c, t) => compositionsToText(c, t, { timestamps: false })
+  },
+  'txt-timestamps': {
+    extension: 'txt',
+    mime: 'text/plain',
+    build: (c, t) => compositionsToText(c, t, { timestamps: true })
+  }
+};
+
+app.post('/api/export-text', checkAuth, async (req, res) => {
+  try {
+    const { compositions, tokens, format } = req.body;
     if (!Array.isArray(compositions) || !Array.isArray(tokens)) {
       return res.status(400).json({ error: 'compositions and tokens must be arrays.' });
     }
-    const srt = compositionsToSrt(compositions, tokens);
-    res.json({ srt });
+    const spec = TEXT_FORMATS[format];
+    if (!spec) {
+      return res.status(400).json({
+        error: `Unknown format "${format}". Expected one of: ${Object.keys(TEXT_FORMATS).join(', ')}.`
+      });
+    }
+    res.json({
+      content: spec.build(compositions, tokens),
+      extension: spec.extension,
+      mime: spec.mime
+    });
   } catch (error) {
-    res.status(400).json({ error: error?.message || 'SRT export failed.' });
+    res.status(400).json({ error: error?.message || 'Text export failed.' });
   }
 });
 

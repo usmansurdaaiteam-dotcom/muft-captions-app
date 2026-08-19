@@ -81,20 +81,22 @@
               </div>
             </div>
 
-            <!-- Free Storage status widget -->
+            <!-- Real disk usage for this install -->
             <div class="sidebar-usage">
               <div class="usage-header">
-                <span class="usage-tag">FREE PLAN</span>
+                <span class="usage-tag">DISK USAGE</span>
+                <span class="usage-projects" id="usageProjects"></span>
               </div>
               <div class="usage-item">
-                <div class="usage-label">Storage <span>0.4 GB / 5.0 GB</span></div>
-                <div class="progress-bar"><div class="progress-fill" style="width: 8%;"></div></div>
+                <div class="usage-label">Videos <span id="usageUploads">—</span></div>
               </div>
               <div class="usage-item">
-                <div class="usage-label">Transcription <span>1.1 mins left</span></div>
-                <div class="progress-bar"><div class="progress-fill" style="width: 22%;"></div></div>
+                <div class="usage-label">Timeline cache <span id="usageCache">—</span></div>
               </div>
-              <button class="upgrade-btn">Upgrade Account</button>
+              <div class="usage-item hidden" id="usageReclaimItem">
+                <div class="usage-label">Reclaimable <span id="usageReclaim">—</span></div>
+              </div>
+              <button class="upgrade-btn" id="cleanupBtn">Free up space</button>
             </div>
           </div>
 
@@ -102,11 +104,41 @@
           <div id="loadedLeftState" class="loaded-left-state hidden">
             <div class="panel-header">
               <h2>Captions</h2>
-              <div class="view-toggle">
-                <button class="toggle-btn active" id="wordViewBtn" data-view="word">WORD</button>
-                <button class="toggle-btn" id="lineViewBtn" data-view="line">LINE</button>
+              <div class="panel-header-actions">
+                <button class="icon-btn" id="findReplaceBtn" title="Find and replace (Ctrl+F)" aria-label="Find and replace">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </button>
+                <div class="view-toggle">
+                  <button class="toggle-btn active" id="wordViewBtn" data-view="word">WORD</button>
+                  <button class="toggle-btn" id="lineViewBtn" data-view="line">LINE</button>
+                </div>
               </div>
             </div>
+
+            <div class="find-replace hidden" id="findReplacePanel">
+              <div class="find-replace-row">
+                <input type="text" id="findInput" placeholder="Find word" aria-label="Find" />
+                <span class="find-count" id="findCount"></span>
+              </div>
+              <div class="find-replace-row">
+                <input type="text" id="replaceInput" placeholder="Replace with" aria-label="Replace with" />
+              </div>
+              <div class="find-replace-actions">
+                <label class="find-option">
+                  <input type="checkbox" id="findWholeWord" checked />
+                  <span>Whole word</span>
+                </label>
+                <label class="find-option">
+                  <input type="checkbox" id="findMatchCase" />
+                  <span>Match case</span>
+                </label>
+              </div>
+              <div class="find-replace-actions">
+                <button class="style-btn" id="replaceAllBtn">Replace all</button>
+                <button class="style-btn ghost" id="closeFindBtn">Close</button>
+              </div>
+            </div>
+
             <div class="caption-list" id="captionList">
               <!-- Compositions text blocks populate dynamically -->
             </div>
@@ -133,6 +165,10 @@
                   <div class="upload-selected" id="uploadSelected"></div>
                 </div>
               </div>
+              <label class="upload-option">
+                <span>Spoken language</span>
+                <select name="language" id="languageSelect"></select>
+              </label>
               <button type="submit" class="upload-btn" id="uploadBtn">
                 <span>Generate Captions</span>
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
@@ -217,6 +253,15 @@
 
             <!-- ── TEXT ── -->
             <div class="inspector-panel hidden" data-panel="text">
+              <div class="scope-switch">
+                <span class="scope-label">Changes apply to</span>
+                <div class="scope-options">
+                  <button class="scope-btn active" id="scopeAllBtn" data-scope="all">All lines</button>
+                  <button class="scope-btn" id="scopeLineBtn" data-scope="line">This line</button>
+                </div>
+                <p class="scope-hint hidden" id="scopeHint"></p>
+              </div>
+
               <div class="control-group">
                 <h4>Font</h4>
                 <label class="style-label">
@@ -227,6 +272,13 @@
                   Weight
                   <select id="soFontWeight"></select>
                 </label>
+                <div class="font-upload">
+                  <label class="export-alt-btn font-upload-btn">
+                    Upload a font
+                    <input type="file" id="fontUploadInput" accept=".ttf,.otf" hidden />
+                  </label>
+                  <p class="control-hint">TTF or OTF only, so the font renders identically in the export.</p>
+                </div>
                 <label class="style-label">
                   Size <output id="soFontSizeVal">80</output>px
                   <input type="range" id="soFontSize" min="28" max="160" step="1" value="80" />
@@ -425,8 +477,14 @@
                 </button>
               </div>
               <div class="control-group">
-                <h4>Subtitles</h4>
-                <button class="export-alt-btn" id="exportSrtBtn">Download .srt</button>
+                <h4>Subtitles &amp; transcript</h4>
+                <p class="control-hint">Generated from the same captions as the video, so they always match your edits.</p>
+                <div class="export-format-grid">
+                  <button class="export-alt-btn" data-text-format="srt">.srt</button>
+                  <button class="export-alt-btn" data-text-format="vtt">.vtt</button>
+                  <button class="export-alt-btn" data-text-format="txt">Transcript</button>
+                  <button class="export-alt-btn" data-text-format="txt-timestamps">Timestamped</button>
+                </div>
               </div>
               <div class="control-group">
                 <h4>Preview</h4>

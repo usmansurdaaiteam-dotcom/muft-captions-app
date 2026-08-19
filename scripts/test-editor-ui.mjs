@@ -10,6 +10,13 @@
  */
 
 import puppeteer from 'puppeteer-core';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const execFileAsync = promisify(execFile);
+const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 
 const BASE = process.argv[2] || 'http://localhost:3111';
 const PASSWORD = process.env.ACCESS_PASSWORD || 'muftcaptions2026';
@@ -48,6 +55,10 @@ async function captionInk(page) {
   });
 }
 
+// These tests edit captions and styles as part of what they check, so the
+// fixtures are rebuilt first to keep runs comparable.
+await execFileAsync('node', [path.join(SCRIPTS, 'make-fixtures.mjs')], { maxBuffer: 16 * 1024 * 1024 });
+
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
@@ -60,8 +71,11 @@ try {
 
   page.on('console', msg => consoleLines.push(`[${msg.type()}] ${msg.text()}`));
   page.on('pageerror', err => {
-    consoleLines.push(`[pageerror] ${err.message}`);
-    problems.push(`Uncaught page error: ${err.message}`);
+    // The stack is what makes an uncaught error actionable; the message alone
+    // rarely says which of the editor's many listeners threw.
+    const where = (err.stack || '').split('\n').slice(1, 4).join(' | ').trim();
+    consoleLines.push(`[pageerror] ${err.message}${where ? `\n              at ${where}` : ''}`);
+    problems.push(`Uncaught page error: ${err.message}${where ? ` (at ${where})` : ''}`);
   });
   page.on('requestfailed', req =>
     consoleLines.push(`[requestfailed] ${req.url()} ${req.failure()?.errorText}`));
@@ -237,7 +251,126 @@ try {
     check('legacy project present', false, 'card not found');
   }
 
-  // 12. Only one render loop should be running no matter how many opens
+  // 12. Timeline media tracks actually drew something
+  const tracks = await page.evaluate(() => {
+    const inked = (id) => {
+      const canvas = document.getElementById(id);
+      if (!canvas || !canvas.width) return 0;
+      const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 12) n++;
+      return n;
+    };
+    const visible = (id) => {
+      const el = document.getElementById(id);
+      if (!el) return false;
+      const box = el.getBoundingClientRect();
+      const viewport = document.getElementById('timelineViewport').getBoundingClientRect();
+      return box.height > 0 && box.bottom <= viewport.bottom + 1;
+    };
+    return {
+      filmInk: inked('filmstripCanvas'),
+      waveInk: inked('waveformCanvas'),
+      videoTrackVisible: visible('videoTrack'),
+      audioTrackVisible: visible('audioTrack')
+    };
+  });
+  check('filmstrip track drew thumbnails', tracks.filmInk > 1000, `${tracks.filmInk} pixels`);
+  check('waveform track drew an envelope', tracks.waveInk > 500, `${tracks.waveInk} pixels`);
+  check('both media tracks are inside the timeline viewport',
+    tracks.videoTrackVisible && tracks.audioTrackVisible, JSON.stringify(tracks));
+
+  // 13. Preview shape follows the source video
+  const aspect = await page.evaluate(() => {
+    const s = window.__muft.state;
+    const container = document.getElementById('videoContainer');
+    return {
+      videoAspect: s.videoAspect,
+      baseW: s.baseCanvasWidth,
+      baseH: s.baseCanvasHeight,
+      containerAspect: getComputedStyle(container).aspectRatio
+    };
+  });
+  const expectedAspect = aspect.baseW / aspect.baseH;
+  check('canvas matches the video aspect', Math.abs(expectedAspect - aspect.videoAspect) < 0.02,
+    JSON.stringify(aspect));
+
+  // 14. Safe zones
+  await page.click('#safeZoneBtn');
+  await new Promise(r => setTimeout(r, 200));
+  const safeOn = await page.evaluate(() =>
+    !document.getElementById('safeZones').classList.contains('hidden'));
+  await page.click('#safeZoneBtn');
+  await new Promise(r => setTimeout(r, 200));
+  const safeOff = await page.evaluate(() =>
+    document.getElementById('safeZones').classList.contains('hidden'));
+  check('safe zones toggle on and off', safeOn && safeOff);
+
+  // 15. Find and replace really changes the caption text
+  const replaceResult = await page.evaluate(async () => {
+    const before = window.__muft.state.tokens.map(t => t.text).join(' ');
+    document.getElementById('findReplaceBtn').click();
+    const find = document.getElementById('findInput');
+    const replace = document.getElementById('replaceInput');
+    find.value = 'insane';
+    find.dispatchEvent(new Event('input', { bubbles: true }));
+    const countText = document.getElementById('findCount').textContent;
+    replace.value = 'zabardast';
+    document.getElementById('replaceAllBtn').click();
+    await new Promise(r => setTimeout(r, 400));
+    return { before, after: window.__muft.state.tokens.map(t => t.text).join(' '), countText };
+  });
+  check('find reports matches', /\d/.test(replaceResult.countText), replaceResult.countText);
+  check('replace all rewrote the transcript',
+    replaceResult.after.includes('zabardast') && !replaceResult.after.includes('insane'),
+    replaceResult.after);
+
+  // 16. Per-line styling only affects the line under the playhead
+  const perLine = await page.evaluate(async () => {
+    const s = window.__muft.state;
+    const target = s.compositions[1];
+    document.getElementById('videoPlayer').currentTime = (target.start_ms + 60) / 1000;
+    await new Promise(r => setTimeout(r, 400));
+
+    document.getElementById('scopeLineBtn').click();
+    const picker = document.getElementById('soActiveColor');
+    picker.value = '#ff0000';
+    picker.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 300));
+
+    return {
+      styledLine: Object.keys(target.styleOverrides || {}),
+      otherLine: Object.keys(s.compositions[0].styleOverrides || {}),
+      projectLevel: Object.keys(s.styleOverrides)
+    };
+  });
+  check('per-line styling records on that line only',
+    perLine.styledLine.includes('activeColor') && perLine.otherLine.length === 0,
+    JSON.stringify(perLine));
+
+  await page.evaluate(() => document.getElementById('scopeAllBtn').click());
+
+  // 17. Language picker and font upload control exist and are populated
+  const options = await page.evaluate(() => ({
+    languages: document.querySelectorAll('#languageSelect option').length,
+    fontFamilies: document.querySelectorAll('#soFontFamily option').length,
+    hasFontUpload: !!document.getElementById('fontUploadInput'),
+    textFormats: document.querySelectorAll('[data-text-format]').length
+  }));
+  check('language list is populated', options.languages > 20, `${options.languages} languages`);
+  check('font picker is populated', options.fontFamilies > 10, `${options.fontFamilies} families`);
+  check('font upload control is present', options.hasFontUpload);
+  check('text export formats offered', options.textFormats >= 4, `${options.textFormats} formats`);
+
+  // 18. Disk usage widget shows real figures rather than placeholders
+  const usage = await page.evaluate(() => ({
+    uploads: document.getElementById('usageUploads').textContent,
+    cache: document.getElementById('usageCache').textContent
+  }));
+  check('disk usage widget shows real values',
+    /\d/.test(usage.uploads) && usage.uploads !== '—', JSON.stringify(usage));
+
+  // 20. Only one render loop should be running no matter how many opens
   const loops = await page.evaluate(() => {
     let count = 0;
     const original = window.requestAnimationFrame;

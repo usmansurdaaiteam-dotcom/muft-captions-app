@@ -1,7 +1,17 @@
 ﻿/**
- * Muft Captions V2 â€” Frontend Editor
- * Kalakar-style caption editor with word-level timing, hero word emphasis, and MP4 export.
+ * Muft Captions — editor front end.
+ *
+ * Caption editor with word-level timing, template-driven styling and MP4 export.
+ * Drawing is done by the shared renderer module in src/render, which the server
+ * also uses for the export, so the preview and the rendered file agree.
  */
+
+/**
+ * Declared first because module-level setup throughout this file looks elements
+ * up immediately; a later declaration would put it in the temporal dead zone and
+ * abort the whole script.
+ */
+const $ = id => document.getElementById(id);
 
 // â”€â”€â”€ Authentication & VPS Protection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -132,6 +142,9 @@ const state = {
   // it can be rebuilt from a project file at any time.
   templateId: 'muft-default',
   styleOverrides: {},
+  // 'all' writes style edits to the project; 'line' writes them to the single
+  // composition under the playhead.
+  styleScope: 'all',
   template: null,
   templateList: [],
   templateCategory: 'All',
@@ -188,7 +201,16 @@ function refreshTemplate() {
   const base = window.CaptionTemplates.getTemplate(state.templateId);
   state.template = window.applyStyleOverrides(base, state.styleOverrides);
   if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
+
+  // Load whatever fonts are actually in use, including any a single line asks
+  // for, so a per-line font override is not measured against a fallback.
   ensureCaptionFont(state.template.font.family, state.template.font.weight);
+  for (const comp of state.compositions) {
+    const perLine = comp.styleOverrides;
+    if (perLine && perLine.fontFamily) {
+      ensureCaptionFont(perLine.fontFamily, perLine.fontWeight || state.template.font.weight);
+    }
+  }
 }
 
 // â”€â”€â”€ Project Database & Autosave API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -267,32 +289,98 @@ function pushUndoState() {
   updateUndoRedoButtons();
 }
 
+/** The composition under the playhead, or null. */
+function activeComposition() {
+  const ms = state.currentTime * 1000;
+  return state.compositions.find(c => ms >= c.start_ms && ms < c.end_ms) || null;
+}
+
 /**
- * Record a style tweak for this project and re-render.
+ * Where style edits are written: the whole project, or just the line currently
+ * under the playhead. A per-line override layers on top of the project's.
+ */
+function currentOverrideTarget() {
+  if (state.styleScope !== 'line') return state.styleOverrides;
+  const comp = activeComposition();
+  if (!comp) return null;
+  if (!comp.styleOverrides) comp.styleOverrides = {};
+  return comp.styleOverrides;
+}
+
+/**
+ * Record a style tweak and re-render.
  *
  * Tweaks are stored as overrides rather than by mutating the template, so the
- * template stays the shared, immutable definition and the project remembers
- * only what the user actually changed. Passing null clears an override and
- * restores the template's own value.
+ * template stays the shared, immutable definition and only what the user
+ * actually changed is remembered. Passing null clears an override and restores
+ * the underlying value.
  */
 function setStyleOverride(key, value) {
-  if (value === null || value === undefined) {
-    delete state.styleOverrides[key];
-  } else {
-    state.styleOverrides[key] = value;
-  }
-  refreshTemplate();
-  renderCaptions();
+  setStyleOverrides({ [key]: value });
 }
 
 function setStyleOverrides(patch) {
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null || value === undefined) delete state.styleOverrides[key];
-    else state.styleOverrides[key] = value;
+  const target = currentOverrideTarget();
+  if (!target) {
+    showNotice('Move the playhead onto a caption line to style just that line.', 'warning', 5000);
+    return;
   }
+
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === undefined) delete target[key];
+    else target[key] = value;
+  }
+
   refreshTemplate();
   renderCaptions();
+  updateScopeHint();
 }
+
+/** Resolved template for the line under the playhead, including its own tweaks. */
+function inspectedTemplate() {
+  if (!state.template) return null;
+  const comp = activeComposition();
+  if (comp && comp.styleOverrides && Object.keys(comp.styleOverrides).length && window.applyStyleOverrides) {
+    return window.applyStyleOverrides(state.template, comp.styleOverrides);
+  }
+  return state.template;
+}
+
+function updateScopeHint() {
+  const hint = $('scopeHint');
+  if (!hint) return;
+
+  const comp = activeComposition();
+  const perLine = comp && comp.styleOverrides ? Object.keys(comp.styleOverrides).length : 0;
+  const styledLines = state.compositions.filter(
+    c => c.styleOverrides && Object.keys(c.styleOverrides).length
+  ).length;
+
+  let message = '';
+  if (state.styleScope === 'line') {
+    message = comp
+      ? `Editing line ${state.compositions.indexOf(comp) + 1}${perLine ? ` — ${perLine} custom setting${perLine === 1 ? '' : 's'}` : ''}.`
+      : 'No caption under the playhead. Move it onto a line first.';
+  } else if (styledLines) {
+    message = `${styledLines} line${styledLines === 1 ? ' has' : 's have'} their own styling, which stays on top of these changes.`;
+  }
+
+  hint.textContent = message;
+  hint.classList.toggle('hidden', !message);
+}
+
+function setStyleScope(scope) {
+  state.styleScope = scope;
+  for (const btn of document.querySelectorAll('.scope-btn')) {
+    btn.classList.toggle('active', btn.dataset.scope === scope);
+  }
+  syncStyleInspector();
+  updateScopeHint();
+}
+
+document.querySelectorAll('.scope-btn').forEach(btn => {
+  btn.addEventListener('click', () => setStyleScope(btn.dataset.scope));
+});
 
 /** First editable colour of a fill, whether solid, gradient or depth. */
 function fillColorOf(style, fallback) {
@@ -321,9 +409,9 @@ function setColorControl(id, hexId, value) {
   setOutput(hexId, value);
 }
 
-/** Push the resolved template's current values into the inspector controls. */
+/** Push the inspected template's current values into the inspector controls. */
 function syncStyleInspector() {
-  const t = state.template;
+  const t = inspectedTemplate();
   if (!t) return;
 
   setControl('soFontFamily', t.font.family);
@@ -387,9 +475,85 @@ function populateFontOptions() {
   const select = $('soFontFamily');
   if (!select || !window.CaptionFonts) return;
   const families = window.CaptionFonts.listFamilies();
-  select.innerHTML = families
+  const builtIn = families.filter(f => !f.custom);
+  const custom = families.filter(f => f.custom);
+
+  const options = (list) => list
     .map(f => `<option value="${f.family}">${f.family}</option>`)
     .join('');
+
+  select.innerHTML = custom.length
+    ? `<optgroup label="Installed">${options(builtIn)}</optgroup>` +
+      `<optgroup label="Your fonts">${options(custom)}</optgroup>`
+    : options(builtIn);
+
+  if (state.template) select.value = state.template.font.family;
+}
+
+/**
+ * Tell the browser-side registry about uploaded fonts.
+ *
+ * The registry module is shared with the server, but only the server reads them
+ * from disk at startup, so the browser has to be told separately for a custom
+ * family to resolve to the same file on both sides.
+ */
+async function loadCustomFontRegistry() {
+  if (!window.CaptionFonts) return;
+  try {
+    const res = await fetch('/api/fonts');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.custom && data.custom.length) {
+      window.CaptionFonts.registerCustomFonts(data.custom);
+      // The @font-face rules are generated server-side, so reload the sheet to
+      // pick up any font added since this page was opened.
+      reloadCaptionFontCss();
+    }
+    populateFontOptions();
+  } catch (err) {
+    console.warn('[fonts] Could not load the font list:', err.message);
+  }
+}
+
+function reloadCaptionFontCss() {
+  const link = document.querySelector('link[href^="/caption-fonts.css"]');
+  if (!link) return;
+  link.href = `/caption-fonts.css?v=${Date.now()}`;
+}
+
+async function uploadFont(file) {
+  const form = new FormData();
+  form.append('font', file);
+
+  showNotice(`Uploading ${file.name}...`, 'info', 4000);
+  try {
+    const res = await fetch('/api/fonts', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+    window.CaptionFonts.registerCustomFonts([data.font]);
+    reloadCaptionFontCss();
+    populateFontOptions();
+
+    // Switch to the new font so the upload visibly did something.
+    setStyleOverrides({ fontFamily: data.font.family, fontWeight: data.font.weight });
+    requestedFonts.clear();
+    await ensureCaptionFont(data.font.family, data.font.weight);
+    syncStyleInspector();
+    saveProjectState();
+
+    showNotice(`"${data.font.family}" is ready to use.`, 'info', 6000);
+  } catch (err) {
+    showNotice(`Font upload failed: ${err.message}`, 'error', 10000);
+  }
+}
+
+if ($('fontUploadInput')) {
+  $('fontUploadInput').addEventListener('change', e => {
+    const file = e.target.files && e.target.files[0];
+    if (file) uploadFont(file);
+    e.target.value = '';
+  });
 }
 
 /** Only offer weights that actually exist as a font file for this family. */
@@ -454,6 +618,7 @@ async function loadProjectsList() {
     const data = await res.json();
     allProjects = data.projects || [];
     renderProjectsGrid(allProjects);
+    loadStorageReport();
   } catch (err) {
     console.error('[Dashboard] Error:', err);
   }
@@ -563,6 +728,74 @@ function applyProjectData(data) {
   refreshTemplate();
   syncStyleInspector();
   renderTemplateGallery();
+}
+
+// ─── Disk usage ───────────────────────────────────────────────────────────────
+
+function formatSize(bytes) {
+  if (!bytes) return '0 MB';
+  const mb = bytes / 1024 / 1024;
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+async function loadStorageReport() {
+  try {
+    const res = await fetch('/api/storage');
+    if (!res.ok) return;
+    renderStorageReport(await res.json());
+  } catch (err) {
+    console.warn('[Storage] Unavailable:', err.message);
+  }
+}
+
+function renderStorageReport(report) {
+  const projects = $('usageProjects');
+  if (projects) {
+    projects.textContent = `${report.projects} project${report.projects === 1 ? '' : 's'}`;
+  }
+  const uploads = $('usageUploads');
+  if (uploads) uploads.textContent = `${formatSize(report.uploads.bytes)} · ${report.uploads.files} files`;
+  const cache = $('usageCache');
+  if (cache) cache.textContent = formatSize(report.cache.bytes);
+
+  // Only mention reclaimable space when there is some, so the row is a prompt
+  // to act rather than permanent furniture.
+  const item = $('usageReclaimItem');
+  const value = $('usageReclaim');
+  const reclaimable = report.reclaimable.bytes;
+  if (item) item.classList.toggle('hidden', reclaimable <= 0);
+  if (value) value.textContent = formatSize(reclaimable);
+
+  const button = $('cleanupBtn');
+  if (button) {
+    button.disabled = reclaimable <= 0;
+    button.textContent = reclaimable > 0 ? `Free up ${formatSize(reclaimable)}` : 'Nothing to clean up';
+  }
+}
+
+if ($('cleanupBtn')) {
+  $('cleanupBtn').addEventListener('click', async () => {
+    const button = $('cleanupBtn');
+    button.disabled = true;
+    button.textContent = 'Cleaning...';
+    try {
+      const res = await fetch('/api/storage/cleanup', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      renderStorageReport(data.storage);
+      showNotice(
+        `Freed ${formatSize(data.removed.bytes)} — removed ${data.removed.exports} finished export(s), ` +
+        `${data.removed.orphans} unused video(s) and ${data.removed.cache} cache file(s).`,
+        'info', 8000
+      );
+    } catch (err) {
+      showNotice(`Cleanup failed: ${err.message}`, 'error', 8000);
+      button.disabled = false;
+      button.textContent = 'Free up space';
+    }
+  });
 }
 
 // ─── Template gallery ─────────────────────────────────────────────────────────
@@ -676,9 +909,8 @@ function selectTemplate(templateId) {
   saveProjectState();
 }
 
-// â”€â”€â”€ DOM Refs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── DOM Refs ─────────────────────────────────────────────────────────────────
 
-const $ = id => document.getElementById(id);
 const uploadForm = $('uploadForm');
 const mediaInput = $('mediaInput');
 const uploadZone = $('uploadZone');
@@ -1393,7 +1625,11 @@ function reconcileCompositions() {
  */
 function commitEdit() {
   reconcileCompositions();
-  commitEdit();
+  saveProjectState();
+  renderCaptionList();
+  renderTimeline();
+  renderCaptions();
+  updateScopeHint();
 }
 
 function handleWordClick(compId, tokenId) {
@@ -1500,6 +1736,12 @@ videoPlayer.addEventListener('timeupdate', () => {
   if (active && active.id !== state.activeCompositionId) {
     state.activeCompositionId = active.id;
     highlightActiveCaption();
+    // While styling a single line, the inspector should follow the playhead so
+    // its values always describe the line being edited.
+    if (state.styleScope === 'line') {
+      syncStyleInspector();
+      updateScopeHint();
+    }
   }
 });
 
@@ -2248,11 +2490,26 @@ if ($('soFontFamily')) {
 
 if ($('resetStyleBtn')) {
   $('resetStyleBtn').addEventListener('click', () => {
-    if (!Object.keys(state.styleOverrides).length) return;
-    pushUndoState();
-    state.styleOverrides = {};
+    if (state.styleScope === 'line') {
+      const comp = activeComposition();
+      if (!comp || !comp.styleOverrides || !Object.keys(comp.styleOverrides).length) {
+        showNotice('This line has no styling of its own.', 'info', 4000);
+        return;
+      }
+      pushUndoState();
+      delete comp.styleOverrides;
+    } else {
+      if (!Object.keys(state.styleOverrides).length) {
+        showNotice('There is nothing to reset — the template is unmodified.', 'info', 4000);
+        return;
+      }
+      pushUndoState();
+      state.styleOverrides = {};
+    }
+
     refreshTemplate();
     syncStyleInspector();
+    updateScopeHint();
     renderCaptions();
     saveProjectState();
   });
@@ -2279,6 +2536,123 @@ if ($('templateSearch')) {
     renderTemplateGallery();
   });
 }
+
+// ─── Find and replace ─────────────────────────────────────────────────────────
+
+/** Escape a user-typed string so it is matched literally, not as a pattern. */
+function escapeForRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildFindPattern() {
+  const term = ($('findInput') && $('findInput').value) || '';
+  if (!term.trim()) return null;
+
+  const wholeWord = $('findWholeWord') ? $('findWholeWord').checked : true;
+  const matchCase = $('findMatchCase') ? $('findMatchCase').checked : false;
+  const escaped = escapeForRegex(term.trim());
+  // \b does not work next to non-Latin script, so the word boundary is
+  // expressed as "not adjacent to another word character" instead.
+  const source = wholeWord ? `(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])` : escaped;
+
+  try {
+    return new RegExp(source, matchCase ? 'gu' : 'giu');
+  } catch {
+    return new RegExp(escaped, matchCase ? 'g' : 'gi');
+  }
+}
+
+function countFindMatches() {
+  const el = $('findCount');
+  if (!el) return 0;
+
+  const pattern = buildFindPattern();
+  if (!pattern) {
+    el.textContent = '';
+    return 0;
+  }
+
+  let words = 0;
+  let total = 0;
+  for (const token of state.tokens) {
+    const matches = String(token.text || '').match(pattern);
+    if (matches) {
+      words++;
+      total += matches.length;
+    }
+  }
+  el.textContent = total ? `${total} in ${words} word${words === 1 ? '' : 's'}` : 'no matches';
+  return total;
+}
+
+function replaceAllMatches() {
+  const pattern = buildFindPattern();
+  if (!pattern) return;
+
+  const replacement = ($('replaceInput') && $('replaceInput').value) || '';
+  let changed = 0;
+
+  pushUndoState();
+  for (const token of state.tokens) {
+    const original = String(token.text || '');
+    const updated = original.replace(pattern, replacement);
+    if (updated !== original) {
+      // An empty replacement would leave a blank word that renders as a gap, so
+      // keep the token but trim it and let reconciliation drop it if empty.
+      token.text = updated.trim();
+      changed++;
+    }
+  }
+
+  if (!changed) {
+    showNotice('Nothing matched, so nothing was replaced.', 'info', 4000);
+    return;
+  }
+
+  // Words emptied by the replacement are removed outright.
+  state.tokens = state.tokens.filter(t => String(t.text || '').trim());
+  commitEdit();
+  countFindMatches();
+  showNotice(`Replaced text in ${changed} word${changed === 1 ? '' : 's'}.`, 'info', 5000);
+}
+
+function toggleFindReplace(show) {
+  const panel = $('findReplacePanel');
+  if (!panel) return;
+  const visible = show === undefined ? panel.classList.contains('hidden') : show;
+  panel.classList.toggle('hidden', !visible);
+  if (visible && $('findInput')) {
+    $('findInput').focus();
+    $('findInput').select();
+    countFindMatches();
+  }
+}
+
+if ($('findReplaceBtn')) $('findReplaceBtn').addEventListener('click', () => toggleFindReplace());
+if ($('closeFindBtn')) $('closeFindBtn').addEventListener('click', () => toggleFindReplace(false));
+if ($('replaceAllBtn')) $('replaceAllBtn').addEventListener('click', replaceAllMatches);
+for (const id of ['findInput', 'findWholeWord', 'findMatchCase']) {
+  const el = $(id);
+  if (el) el.addEventListener('input', countFindMatches);
+  if (el) el.addEventListener('change', countFindMatches);
+}
+if ($('findInput')) {
+  $('findInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      replaceAllMatches();
+    } else if (e.key === 'Escape') {
+      toggleFindReplace(false);
+    }
+  });
+}
+
+window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && state.projectId) {
+    e.preventDefault();
+    toggleFindReplace(true);
+  }
+});
 
 function applyLowResMode() {
   const isLowRes = $('lowResToggle') ? $('lowResToggle').checked : false;
@@ -2461,30 +2835,71 @@ $('cancelExportBtn').addEventListener('click', async () => {
 
 // â”€â”€â”€ Export: SRT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-$('exportSrtBtn').addEventListener('click', async () => {
+/** Download subtitles or a transcript in one of the text formats. */
+async function exportTextFormat(format) {
+  if (!state.compositions.length) {
+    showNotice('There are no captions to export yet.', 'warning', 5000);
+    return;
+  }
   try {
-    const response = await fetch('/api/export-srt', {
+    const response = await fetch('/api/export-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ compositions: state.compositions, tokens: state.tokens })
+      body: JSON.stringify({ compositions: state.compositions, tokens: state.tokens, format })
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
 
-    const blob = new Blob([data.srt], { type: 'application/x-subrip;charset=utf-8' });
+    const blob = new Blob([data.content], { type: `${data.mime};charset=utf-8` });
     const url = URL.createObjectURL(blob);
+    const baseName = state.filename.replace(/\.[^/.]+$/, '') || 'captions';
+    const suffix = format === 'txt-timestamps' ? '-transcript-timestamped'
+      : format === 'txt' ? '-transcript'
+        : '-captions';
     const a = document.createElement('a');
     a.href = url;
-    const baseName = state.filename.replace(/\.[^/.]+$/, '');
-    a.download = `${baseName}-captions.srt`;
+    a.download = `${baseName}${suffix}.${data.extension}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
   } catch (err) {
-    alert('SRT export failed: ' + err.message);
+    showNotice(`Export failed: ${err.message}`, 'error', 8000);
   }
+}
+
+document.querySelectorAll('[data-text-format]').forEach(btn => {
+  btn.addEventListener('click', () => exportTextFormat(btn.dataset.textFormat));
 });
+
+// ─── Language selection ───────────────────────────────────────────────────────
+
+async function loadLanguages() {
+  const select = $('languageSelect');
+  if (!select) return;
+  try {
+    const res = await fetch('/api/languages');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    select.innerHTML = data.languages.map(group =>
+      `<optgroup label="${group.group}">` +
+      group.options.map(o => `<option value="${o.id}">${o.label}</option>`).join('') +
+      '</optgroup>'
+    ).join('');
+
+    // Remember the last choice; a creator usually uploads the same language.
+    const remembered = localStorage.getItem('muft_language');
+    select.value = remembered || data.defaultLanguage;
+    if (!select.value) select.value = data.defaultLanguage;
+
+    select.addEventListener('change', () => {
+      localStorage.setItem('muft_language', select.value);
+    });
+  } catch (err) {
+    console.warn('[Languages] Could not load list:', err.message);
+  }
+}
 
 // Search Projects Filter
 const projectSearchInput = $('projectSearchInput');
@@ -2855,13 +3270,16 @@ updateUndoRedoButtons();
  * The renderer is an ES module, so it finishes loading after this classic
  * script. Everything that depends on it is set up once it announces itself.
  */
-function onRendererReady() {
+async function onRendererReady() {
   populateFontOptions();
   refreshTemplate();
   syncStyleInspector();
   loadTemplateList();
   renderCaptions();
+  await loadCustomFontRegistry();
 }
+
+loadLanguages();
 
 if (window.CaptionRenderer) onRendererReady();
 else window.addEventListener('caption-renderer-ready', onRendererReady, { once: true });
