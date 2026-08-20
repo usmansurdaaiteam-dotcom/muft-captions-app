@@ -18,7 +18,7 @@ npm start
 
 The password gate is off in a Codespace, since the URL is already private to you.
 Everything except generating new captions works without credentials — the editor,
-all 35 templates, the timeline, and MP4 export all run on the sample projects.
+all 37 templates, the timeline, and MP4 export all run on the sample projects.
 
 ### Locally
 
@@ -208,8 +208,30 @@ Two layout modes:
 
 - **karaoke** — the whole phrase is on screen and the word being spoken is
   styled differently. This is how most viral caption styles work.
-- **hero** — one chosen word renders large and centred with the surrounding
-  words stacked above and below it.
+- **hero** — one chosen word renders large with the words spoken before it on a
+  line above and those after it below. Hero-mode extras: `heroSizeScale`,
+  `heroSupportSizeScale`, `heroCasing` (so the hero can shout in caps while the
+  support text stays as spoken), `heroSupportAlign` and `heroGapEm`.
+
+`layout.reveal` decides whether the whole phrase arrives at once (`all`) or words
+appear as they are spoken (`progressive`). Positions are laid out for the finished
+line either way, so a revealing word appears in place rather than pushing the
+words already on screen around.
+
+### Emphasis pacing
+
+A hero template only emphasises lines the composer marked `emphasis` or
+`spotlight`; a `plain` line renders entirely in the base style with nothing
+picked out. That distinction is what stops an emphasis style feeling relentless —
+the quiet lines are what give the loud ones their impact.
+
+How often emphasis fires is enforced in `src/composition-engine.js` rather than
+left to the composer. `enforceEmphasisBudget` budgets against the length of the
+clip, not a share of lines, because fast speech is cut into far more lines and a
+percentage target quietly becomes a flood. It scores candidates from the hero word
+itself and the speaker's delivery, keeps the strongest that fit, and refuses to
+spend the budget on a filler word. `enforceLineBreaks` splits any line that runs
+across a pause or overruns the word limit.
 
 Style blocks (`word`, `active`, and optionally `pending` / `spoken`) accept
 `fill` (solid, gradient or depth), `stroke`, `shadow`, `glow`, `background`
@@ -257,11 +279,14 @@ instances variable sources into real static weights to make that possible.
 ## Tests
 
 ```bash
-npm test                 # syntax, the template catalogue, per-line styling
+npm test                 # syntax, catalogue, styling, reference match, reveal, Gemini
 npm run test:all         # everything, including the browser tests
 
-npm run test:templates   # every template draws real ink, in frame, at 4 aspect ratios
-npm run test:styles      # a single line can be styled without affecting the others
+npm run test:templates   # every template draws real ink, in frame, at 4 aspect ratios,
+                         # and survives phrases long enough to test auto-shrink
+npm run test:styles      # a line, and a single word inside it, can be restyled alone
+npm run test:reference   # Muft Glow measured against the reference clip, phrase by phrase
+npm run test:reveal      # word-by-word templates reveal in place without reflowing
 npm run test:gemini      # Gemini client against a stand-in backend: routing, auth,
                          # structured output, retry-on-rejection, retired models
 npm run test:ui          # headless browser: preview renders, controls work, no leaks
@@ -269,6 +294,37 @@ npm run test:wysiwyg     # the preview and the export agree on layout
 npm run test:export      # queue a real render and verify captions are in the pixels
 npm run preview:templates  # contact sheet of the catalogue as a PNG
 ```
+
+Two checks report on real projects rather than fixtures, so they are diagnostics
+rather than part of `npm test`:
+
+```bash
+npm run check:emphasis   # how often a project emphasises a word, against the reference
+npm run check:breaks     # whether lines end at pauses and stay readable
+npm run recompose -- projects/<id>.json          # re-compose an existing transcript
+npm run recompose -- projects/<id>.json --write  # and save the result
+```
+
+`recompose` is the way to try a prompt change against real speech without
+spending a transcription, and the way to bring a project composed under older
+pacing rules up to date.
+
+### Matching a reference style
+
+`npm run test:reference` exists because "does this look right?" is not something
+two people can settle by looking. The figures it checks were taken by scanning
+every frame of a reference clip, isolating the emphasised word by colour, and
+measuring its ink: cap height as a share of frame height, colour at the glyph
+core, the size ratio between emphasised and supporting text, alignment, and where
+the block sits. The script renders the same phrases with our template and
+measures them the same way.
+
+It also records what could not be matched. The reference moves its caption block
+by up to 5% of frame height between lines — rock steady while a line is on screen,
+and not predicted by anything in the line's own structure, which looks like it is
+keeping clear of the speaker. A fixed anchor cannot reproduce that, so the
+vertical tolerance is set to the reference's own spread rather than to a precision
+that does not exist.
 
 The UI, WYSIWYG and export tests need a running server. They default to
 `http://localhost:3111` and create their own fixtures:
