@@ -416,6 +416,89 @@ try {
   check('reset clears the word and its marker',
     perWord.clearedAfterReset && perWord.markerClearedAfterReset);
 
+  // 16c. Dragging the caption tracks the cursor, and snaps to the guides
+  const dragResult = await page.evaluate(async () => {
+    // Reset placement to a spot that is not already on a snap target, and clear
+    // the per-line scope so the drag writes to the project.
+    document.getElementById('scopeAllBtn').click();
+    window.__muft.state.styleOverrides.x = 0.35;
+    window.__muft.state.styleOverrides.y = 0.6;
+    window.__muft.refreshTemplate();
+    document.getElementById('videoPlayer').pause();
+    await new Promise(r => setTimeout(r, 500));
+    const outline = document.getElementById('canvasSelectOutline');
+    const canvas = document.getElementById('captionCanvas');
+    return {
+      visible: !outline.classList.contains('hidden'),
+      outline: outline.getBoundingClientRect().toJSON(),
+      canvas: canvas.getBoundingClientRect().toJSON(),
+      x: window.__muft.state.styleOverrides.x,
+      y: window.__muft.state.styleOverrides.y
+    };
+  });
+
+  if (!dragResult.visible) {
+    check('caption drag box is visible when paused', false, 'outline hidden');
+  } else {
+    const startX = dragResult.outline.x + dragResult.outline.width / 2;
+    const startY = dragResult.outline.y + dragResult.outline.height / 2;
+    const moveBy = 26;
+
+    // Shift held so snapping cannot mask a scaling error.
+    await page.keyboard.down('Shift');
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + moveBy, startY + moveBy, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+
+    const after = await page.evaluate(() => ({
+      x: window.__muft.state.styleOverrides.x,
+      y: window.__muft.state.styleOverrides.y
+    }));
+
+    // A caption's position is a fraction of the frame, so moving the cursor a
+    // quarter of the way across the video should move the caption a quarter of
+    // the way across it too. This previously ran nearly 3x fast on a video whose
+    // own pixel size differed from the design canvas.
+    const expectedDx = moveBy / dragResult.canvas.width;
+    const expectedDy = moveBy / dragResult.canvas.height;
+    const gotDx = after.x - dragResult.x;
+    const gotDy = after.y - dragResult.y;
+    const ratioX = gotDx / expectedDx;
+    const ratioY = gotDy / expectedDy;
+
+    check('caption drag tracks the cursor 1:1',
+      ratioX > 0.85 && ratioX < 1.15 && ratioY > 0.85 && ratioY < 1.15,
+      `moved ${ratioX.toFixed(2)}x horizontally, ${ratioY.toFixed(2)}x vertically`);
+
+    // Snapping: release near the middle without shift and it should land exactly.
+    const snapTarget = await page.evaluate(async () => {
+      const canvas = document.getElementById('captionCanvas').getBoundingClientRect();
+      window.__muft.state.styleOverrides.x = 0.5 - 0.012;
+      window.__muft.refreshTemplate();
+      await new Promise(r => setTimeout(r, 400));
+      const outline = document.getElementById('canvasSelectOutline').getBoundingClientRect();
+      return { canvas: canvas.toJSON(), outline: outline.toJSON() };
+    });
+    const sx = snapTarget.outline.x + snapTarget.outline.width / 2;
+    const sy = snapTarget.outline.y + snapTarget.outline.height / 2;
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 2, sy, { steps: 3 });
+    const guideShown = await page.evaluate(() =>
+      !document.getElementById('dragGuideV').classList.contains('hidden'));
+    await page.mouse.up();
+    const snappedX = await page.evaluate(() => window.__muft.state.styleOverrides.x);
+
+    check('a drag near the middle snaps to it',
+      Math.abs(snappedX - 0.5) < 0.0005, `landed at ${snappedX.toFixed(4)}`);
+    check('the guide line shows while snapped', guideShown);
+    const guideHidden = await page.evaluate(() =>
+      document.getElementById('dragGuideV').classList.contains('hidden'));
+    check('the guide disappears on release', guideHidden);
+  }
+
   check('per-line styling records on that line only',
     perLine.styledLine.includes('activeColor') && perLine.otherLine.length === 0,
     JSON.stringify(perLine));

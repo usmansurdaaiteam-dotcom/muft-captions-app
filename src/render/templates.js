@@ -113,7 +113,13 @@ export const TEMPLATES = [
     word: { fill: solid('#FFFFFF'), shadow: shadow(16, 4, 0.6) },
     active: {
       fill: solid('#9FD83A'),
-      glow: glow('#9FD83A', [{ blur: 30, opacity: 0.5 }, { blur: 13, opacity: 0.75 }]),
+      // Fitted to the halo measured off the reference rather than chosen by eye
+      // — see scripts/tune-glow.mjs. What reads as a glow is how far the light
+      // carries and how gradually it fades, not how bright it is against the
+      // letters, so a tight bright halo looks like a soft edge and nothing more.
+      // The reference carries green about 12px above the cap line at a 501-tall
+      // frame; the previous settings died after 4.
+      glow: glow('#9FD83A', [{ blur: 120, opacity: 0.45 }, { blur: 30, opacity: 0.8 }]),
       shadow: shadow(18, 6, 0.35),
       pop: pop(1.06, 200)
     },
@@ -135,28 +141,44 @@ export const TEMPLATES = [
 
   // ── Creator styles ───────────────────────────────────────────────────────────
   //
-  // Modelled on the named creator presets in the reference gallery. Colours here
-  // are measured and trustworthy — they are flat and saturated, so they survive
-  // compression. Sizes come from two independent readings that agree (the ink
-  // height of the caption, and its width divided by its character count), but
-  // both were taken from a small preview card inside a screen recording, so they
-  // are far less certain than the Muft Glow figures. A full-resolution clip of
-  // either style would let these be measured the way Muft Glow was.
+  // Modelled on the named creator presets in the reference gallery, and measured
+  // by scripts/measure-creator-styles.mjs across every frame where each preset is
+  // the centre card. The recording only shows them as small preview cards, so the
+  // figures below carry different weight and are commented accordingly: colour
+  // and position are solid, outline thickness is at the noise floor. A
+  // full-resolution clip of either style would close that gap.
   {
     id: 'hormozi-green',
     name: 'Hormozi Green',
     category: 'Creator',
     mode: 'karaoke',
-    // Anton's cap height is 0.86 em, so 131px lands a cap height of 113px —
-    // the 5.9% of frame height measured off the reference, held constant across
-    // frames. Its narrow letterforms also match: 15 caps came to 82% of the
-    // frame width there, and to 82% here.
-    font: { family: 'Anton', weight: 400, size: 131, casing: 'upper', lineHeight: 1.1 },
-    layout: { x: 0.5, y: 0.52, maxWidthPct: 0.9, maxLines: 2, align: 'center', reveal: 'progressive' },
-    word: { fill: solid('#ABF649'), stroke: stroke(9), shadow: shadow(0, 7, 0.95) },
+    // Ink height holds at 5.78% of frame height across ten frames. Anton's cap
+    // height is 0.86 em, which puts that at 129px. Anton's narrow letterforms
+    // match too: fifteen capitals fill 82% of the frame width in both.
+    font: { family: 'Anton', weight: 400, size: 129, casing: 'upper', lineHeight: 1.1 },
+    layout: { x: 0.5, y: 0.519, maxWidthPct: 0.9, maxLines: 2, align: 'center', reveal: 'progressive' },
+    // Outline: the reference shows 0.85px of dark edge on a 290px-wide card,
+    // which works back to about 6 in design units. It was 9, which was heavy
+    // enough to thicken the letterforms.
+    //
+    // The glow is the correction that matters. This style does have one — hue
+    // carries about 6px past the letters on that card — and we were rendering
+    // none at all. Fitted with scripts/tune-glow.mjs; the fit is looser than
+    // Muft Glow's because the reference is so small.
+    word: {
+      fill: solid('#ABF548'),
+      stroke: stroke(6),
+      shadow: shadow(0, 7, 0.95),
+      glow: glow('#ABF548', [{ blur: 30, opacity: 0.6 }, { blur: 10, opacity: 0.9 }])
+    },
     // Every word carries the colour in this style; there is no separate
     // highlight, so the spoken word is marked by movement alone.
-    active: { fill: solid('#ABF649'), stroke: stroke(10), pop: pop(1.09, 180) },
+    active: {
+      fill: solid('#ABF548'),
+      stroke: stroke(7),
+      glow: glow('#ABF548', [{ blur: 30, opacity: 0.6 }, { blur: 10, opacity: 0.9 }]),
+      pop: pop(1.09, 180)
+    },
     animation: { target: 'word', type: 'pop', durationMs: 200, from: 0.8, overshoot: 1.5 }
   },
   {
@@ -164,14 +186,21 @@ export const TEMPLATES = [
     name: 'Beast Yellow',
     category: 'Creator',
     mode: 'karaoke',
-    // Smaller than most of the catalogue, and deliberately: the reference sets
-    // this style around 58px against a 1080-wide frame and sits it low.
-    font: { family: 'Inter', weight: 900, size: 58, casing: 'none', lineHeight: 1.26 },
-    layout: { x: 0.5, y: 0.63, maxWidthPct: 0.86, maxLines: 2, align: 'center', reveal: 'progressive' },
-    // A heavy outline plus a hard offset shadow with no blur, which is what
-    // gives this style its cut-out, stuck-on-the-screen look.
-    word: { fill: solid('#F4F502'), stroke: stroke(9), shadow: shadow(0, 8, 1) },
-    active: { fill: solid('#F4F502'), stroke: stroke(10), pop: pop(1.1, 170) },
+    // Smaller than most of the catalogue on purpose: ink height measures 2.20%
+    // of frame height, which for this face's ascenders is about a 56px size.
+    font: { family: 'Inter', weight: 900, size: 56, casing: 'none', lineHeight: 1.26 },
+    // Sits far lower than it was. The reference centres this caption at 74.6% of
+    // frame height; it had been at 63%, which matched nothing. The reference
+    // moves between two heights across its own frames (68% and 79%), the same
+    // per-line shifting seen in Muft Glow, so this is their midpoint.
+    layout: { x: 0.5, y: 0.746, maxWidthPct: 0.86, maxLines: 2, align: 'center', reveal: 'progressive' },
+    // No glow, and that is measured rather than assumed: hue above the letters
+    // reads *below* background here, because the outline and shadow darken it.
+    // What gives this style its cut-out look is the shadow, which carries dark
+    // well past the letters — strongest around 8-11 design units below and still
+    // present at 22, so it is offset and softened rather than a hard edge.
+    word: { fill: solid('#F3F402'), stroke: stroke(5), shadow: shadow(8, 11, 1) },
+    active: { fill: solid('#F3F402'), stroke: stroke(6), pop: pop(1.1, 170) },
     animation: { target: 'word', type: 'pop', durationMs: 190, from: 0.82, overshoot: 1.6 }
   },
 

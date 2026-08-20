@@ -578,6 +578,28 @@ input, select, textarea { font-family: var(--font-ui); }
 }
 .style-popover input[type="color"] { height: 30px; padding: 2px; }
 
+/* Alignment guides while dragging a caption. Only visible when the drag has
+   actually snapped, so they confirm rather than clutter. */
+.drag-guide {
+  position: absolute;
+  z-index: 12;
+  pointer-events: none;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+.drag-guide-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+.drag-guide-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
 .ghost-btn {
   padding: 5px 9px;
   background: var(--bg-input);

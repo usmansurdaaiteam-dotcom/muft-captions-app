@@ -2175,6 +2175,71 @@ function getActiveCaptionBox(ctx) {
   };
 }
 
+const clamp01 = (value, min, max) => Math.max(min, Math.min(max, value));
+
+/**
+ * Positions worth snapping to while dragging a caption.
+ *
+ * Horizontally there is only one that matters — the middle — because a caption
+ * off-centre by a percent reads as a mistake. Vertically these are the places
+ * captions actually get put: clear of the top bar, the middle, the lower third,
+ * and above the bottom UI.
+ */
+const SNAP_X = [0.5];
+const SNAP_Y = [0.25, 0.5, 0.72, 0.82];
+
+// How close counts as close enough, as a fraction of the frame. Small enough
+// that a deliberate placement nearby is left alone.
+const SNAP_RANGE = 0.018;
+
+function nearestSnap(value, targets) {
+  let best = null;
+  for (const target of targets) {
+    const distance = Math.abs(value - target);
+    if (distance <= SNAP_RANGE && (!best || distance < best.distance)) {
+      best = { target, distance };
+    }
+  }
+  return best;
+}
+
+function showDragGuide(id, position) {
+  const guide = $(id);
+  if (!guide) return;
+  if (position === null) {
+    guide.classList.add('hidden');
+    return;
+  }
+  if (id === 'dragGuideV') guide.style.left = `${position * 100}%`;
+  else guide.style.top = `${position * 100}%`;
+  guide.classList.remove('hidden');
+}
+
+function hideDragGuides() {
+  showDragGuide('dragGuideV', null);
+  showDragGuide('dragGuideH', null);
+}
+
+/**
+ * Pull a dragged position onto a nearby guide, and show the guide it landed on
+ * so the snap is visible rather than mysterious. Holding shift turns it off, for
+ * when the caption genuinely belongs slightly off-centre.
+ */
+function applyDragSnap(x, y, disabled) {
+  if (disabled) {
+    hideDragGuides();
+    return { x, y };
+  }
+  const snapX = nearestSnap(x, SNAP_X);
+  const snapY = nearestSnap(y, SNAP_Y);
+  showDragGuide('dragGuideV', snapX ? snapX.target : null);
+  showDragGuide('dragGuideH', snapY ? snapY.target : null);
+  return {
+    x: snapX ? snapX.target : x,
+    y: snapY ? snapY.target : y
+  };
+}
+
 function initCanvasInteraction() {
   const outline = $('canvasSelectOutline');
   if (!outline) return;
@@ -2224,32 +2289,45 @@ function initCanvasInteraction() {
   document.addEventListener('mousemove', e => {
     if (!activeDrag || !state.template) return;
 
-    const canvas = captionCanvas;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = 1080 / rect.width;
-    const scaleY = 1920 / rect.height;
-
-    const deltaX = (e.clientX - activeDrag.startX) * scaleX;
-    const deltaY = (e.clientY - activeDrag.startY) * scaleY;
+    const rect = captionCanvas.getBoundingClientRect();
 
     if (activeDrag.type === 'move') {
-      const newX = Math.max(0.1, Math.min(0.9, activeDrag.startCenterX + deltaX / state.baseCanvasWidth));
-      const newY = Math.max(0.08, Math.min(0.94, activeDrag.startCenterY + deltaY / state.baseCanvasHeight));
-      setStyleOverrides({ x: newX, y: newY });
-      setControl('soX', Math.round(newX * 100));
-      setOutput('soXVal', Math.round(newX * 100));
-      setControl('soY', Math.round(newY * 100));
-      setOutput('soYVal', Math.round(newY * 100));
+      // The caption's position is a fraction of the frame, so the pointer's
+      // travel converts straight to a fraction of the displayed video. Going via
+      // canvas pixels is what made this run away: the delta was scaled into a
+      // fixed 1080x1920 space and then divided by the video's own canvas size,
+      // so on a 384-wide clip the caption moved almost three times as far as the
+      // cursor did.
+      const dx = (e.clientX - activeDrag.startX) / rect.width;
+      const dy = (e.clientY - activeDrag.startY) / rect.height;
+
+      const snapped = applyDragSnap(
+        clamp01(activeDrag.startCenterX + dx, 0.1, 0.9),
+        clamp01(activeDrag.startCenterY + dy, 0.08, 0.94),
+        e.shiftKey
+      );
+
+      setStyleOverrides({ x: snapped.x, y: snapped.y });
+      setControl('soX', Math.round(snapped.x * 100));
+      setOutput('soXVal', Math.round(snapped.x * 100));
+      setControl('soY', Math.round(snapped.y * 100));
+      setOutput('soYVal', Math.round(snapped.y * 100));
     } else if (activeDrag.type === 'scale') {
       const centerX = dragBox.x + dragBox.w / 2;
       const centerY = dragBox.y + dragBox.h / 2;
+      const scaleX = state.baseCanvasWidth / rect.width;
+      const scaleY = state.baseCanvasHeight / rect.height;
 
       const mouseCanvasX = (e.clientX - rect.left) * scaleX;
       const mouseCanvasY = (e.clientY - rect.top) * scaleY;
       const currentDist = Math.hypot(mouseCanvasX - centerX, mouseCanvasY - centerY);
       const ratio = currentDist / activeDrag.startDist;
 
-      const newSize = Math.round(Math.max(28, Math.min(160, activeDrag.startFontSize * ratio)));
+      // Bounds are relative to the template's own size rather than absolute, so
+      // a style authored large (a hero word) and one authored small are both
+      // resizable by the same proportion instead of hitting a shared ceiling.
+      const base = activeDrag.startFontSize;
+      const newSize = Math.round(clamp01(base * ratio, base * 0.4, base * 2.5));
       setStyleOverride('fontSize', newSize);
       setControl('soFontSize', newSize);
       setOutput('soFontSizeVal', newSize);
@@ -2259,6 +2337,7 @@ function initCanvasInteraction() {
   document.addEventListener('mouseup', () => {
     if (activeDrag) {
       activeDrag = null;
+      hideDragGuides();
       saveProjectState();
     }
   });
