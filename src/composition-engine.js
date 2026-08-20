@@ -1,252 +1,239 @@
 /**
  * composition-engine.js
- * 
- * Core engine for building, editing, and rendering caption compositions.
- * A composition = a group of tokens (words) with one hero word, a layout,
- * and per-word timing from Soniox.
+ *
+ * Turns a flat list of transcribed words into caption compositions: groups of
+ * words, each with one word marked as the hero and a type saying how the line
+ * should be presented.
+ *
+ * A composition's `comp_type` is the whole basis of pacing:
+ *   plain     — every word in the base style, nothing picked out
+ *   emphasis  — the hero word large and coloured, support words around it
+ *   spotlight — the hero word alone
+ *
+ * How often emphasis fires is what makes or breaks the look, so it is enforced
+ * here rather than left to whatever the composer returned. See
+ * enforceEmphasisBudget.
  */
 
-// ─── Layout Definitions ────────────────────────────────────────────────────────
-// Each layout defines how to position hero + before + after word groups
-// on a 1080×1920 canvas. All positions are in pixels.
-
-const CANVAS_W = 1080;
-const CANVAS_H = 1920;
-const CENTER_X = CANVAS_W / 2;
-// Caption zone: roughly 40-60% down the vertical frame
-const CAPTION_CENTER_Y = Math.round(CANVAS_H * 0.52);
-
-export const LAYOUTS = {
-  hero_only: {
-    id: 'hero_only',
-    name: 'Hero Only',
-    description: 'Single hero word, centered.',
-    resolve(heroText, beforeText, afterText) {
-      return {
-        hero:   { x: CENTER_X, y: CAPTION_CENTER_Y, anchor: 'center' },
-        before: beforeText ? { x: CENTER_X, y: CAPTION_CENTER_Y - 90, anchor: 'center' } : null,
-        after:  afterText  ? { x: CENTER_X, y: CAPTION_CENTER_Y + 90, anchor: 'center' } : null
-      };
-    }
-  },
-
-  stack_center: {
-    id: 'stack_center',
-    name: 'Stacked Center',
-    description: 'Before words above, hero center, after words below.',
-    resolve(heroText, beforeText, afterText) {
-      return {
-        before: beforeText ? { x: CENTER_X, y: CAPTION_CENTER_Y - 100, anchor: 'center' } : null,
-        hero:   { x: CENTER_X, y: CAPTION_CENTER_Y, anchor: 'center' },
-        after:  afterText  ? { x: CENTER_X, y: CAPTION_CENTER_Y + 100, anchor: 'center' } : null
-      };
-    }
-  },
-
-  before_left_after_right: {
-    id: 'before_left_after_right',
-    name: 'Left-Right Split',
-    description: 'Before words left, hero center, after words right.',
-    resolve(heroText, beforeText, afterText) {
-      return {
-        before: beforeText ? { x: CENTER_X - 40, y: CAPTION_CENTER_Y - 85, anchor: 'right' } : null,
-        hero:   { x: CENTER_X, y: CAPTION_CENTER_Y + 10, anchor: 'center' },
-        after:  afterText  ? { x: CENTER_X + 40, y: CAPTION_CENTER_Y + 95, anchor: 'left' } : null
-      };
-    }
-  },
-
-  hero_left_support_right: {
-    id: 'hero_left_support_right',
-    name: 'Hero Left',
-    description: 'Hero word left-aligned, support words stacked right.',
-    resolve(heroText, beforeText, afterText) {
-      return {
-        hero:   { x: CENTER_X - 120, y: CAPTION_CENTER_Y, anchor: 'center' },
-        before: beforeText ? { x: CENTER_X + 160, y: CAPTION_CENTER_Y - 45, anchor: 'center' } : null,
-        after:  afterText  ? { x: CENTER_X + 160, y: CAPTION_CENTER_Y + 45, anchor: 'center' } : null
-      };
-    }
-  }
-};
-
-export const LAYOUT_IDS = Object.keys(LAYOUTS);
-export const DEFAULT_LAYOUT = 'stack_center';
-
-// ─── Glow Template ─────────────────────────────────────────────────────────────
-
-export const GLOW_TEMPLATE = {
-  id: 'glow',
-  name: 'Muft Glow',
-  description: 'Muft-style amber emphasis with neon glow, Inter Extra Bold, pop bounce.',
-  hero: {
-    color: '#f5b942',
-    fontSize: 120,
-    fontWeight: 800,
-    fontFamily: "'Inter', 'Arial Black', sans-serif",
-    uppercase: true,
-    strokeColor: '#000000',
-    strokeWidth: 5,
-    // Multi-pass glow: draw shadow multiple times for a strong neon effect
-    glowPasses: 3,
-    glowBlur: 24,
-    glowColor: 'rgba(245, 185, 66, 0.7)',
-    shadowBlur: 30,
-    shadowColor: 'rgba(245, 185, 66, 0.55)',
-    animation: {
-      type: 'pop_bounce',
-      scaleFrom: 0.82,
-      scalePeak: 1.15,
-      scaleTo: 1.0,
-      durationMs: 220,
-      peakAtMs: 130
-    }
-  },
-  support: {
-    color: '#FFFFFF',
-    fontSize: 46,
-    fontWeight: 800,
-    fontFamily: "'Inter', 'Arial Black', sans-serif",
-    uppercase: false,
-    strokeColor: '#000000',
-    strokeWidth: 2,
-    glowPasses: 0,
-    glowBlur: 0,
-    glowColor: 'transparent',
-    shadowBlur: 8,
-    shadowColor: 'rgba(0, 0, 0, 0.85)',
-    animation: {
-      type: 'fade_in',
-      durationMs: 50,
-      opacity: { from: 0, to: 1 }
-    }
-  }
-};
-
-// ─── Build Compositions from Gemini Output ─────────────────────────────────────
+// ─── Emphasis pacing ────────────────────────────────────────────────────────────
 
 /**
- * Merge Gemini's composition suggestions with the raw Soniox tokens.
- * Gemini returns: { compositions: [ { token_ids, hero_token_id, layout_id } ] }
- * Each token has: { id, text, start_ms, end_ms, language }
- * 
- * @param {Array} tokens - Raw Soniox tokens with IDs and timestamps
- * @param {Object} geminiOutput - Parsed Gemini response
- * @returns {Array} Array of composition objects ready for rendering
+ * One emphasised word per this many seconds of speech.
+ *
+ * Measured from the reference style by scanning every frame of a clip for the
+ * hero colour: six hero words across twenty-six seconds. Budgeting against time
+ * rather than against a share of lines matters, because fast speech is cut into
+ * many more lines and a percentage target quietly turns into a flood.
  */
-export function buildCompositions(tokens, geminiOutput) {
+export const REFERENCE_SECONDS_PER_EMPHASIS = 4.3;
+
+/** Plain lines required between two emphasised lines. */
+export const MIN_PLAIN_BETWEEN_EMPHASIS = 2;
+
+/** Lowest heroScore that may be emphasised at all. */
+const MIN_HERO_SCORE = 1;
+
+const EMPHATIC_TYPES = new Set(['emphasis', 'spotlight']);
+const COMP_TYPES = new Set(['emphasis', 'plain', 'spotlight']);
+
+/**
+ * Words that carry no weight of their own. Emphasising one is the clearest sign
+ * that a highlight was placed by position rather than by meaning. Covers English
+ * and the Roman Urdu the transcript is romanised into.
+ */
+const FILLER_WORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'but', 'so', 'if', 'then', 'than', 'as', 'at',
+  'by', 'for', 'from', 'in', 'into', 'of', 'on', 'to', 'with', 'is', 'are',
+  'was', 'were', 'be', 'been', 'am', 'do', 'does', 'did', 'have', 'has', 'had',
+  'i', 'me', 'my', 'you', 'your', 'he', 'she', 'it', 'we', 'they', 'them',
+  'this', 'that', 'these', 'those', 'there', 'here', 'what', 'which', 'who',
+  'will', 'would', 'can', 'could', 'should', 'just', 'very', 'really', 'like',
+  'ok', 'okay', 'yeah', 'yes', 'no', 'not', 'now', 'also', 'about', 'up', 'out',
+  'hai', 'hain', 'tha', 'thi', 'the', 'ho', 'hota', 'hoti', 'karna', 'karta',
+  'ki', 'ka', 'ke', 'ko', 'se', 'me', 'mein', 'par', 'aur', 'ya', 'to', 'bhi',
+  'yeh', 'ye', 'woh', 'wo', 'main', 'hum', 'aap', 'tum', 'kya', 'kyun', 'kaise',
+  'phir', 'abhi', 'bas', 'toh', 'na', 'nahi', 'acha', 'matlab'
+]);
+
+const wordKey = text => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/**
+ * How well a word carries a highlight, from the signals available without a
+ * language model: what kind of word it is, how long the speaker spent on it, and
+ * whether they paused after it.
+ *
+ * Used to choose which lines keep their emphasis when there are more than the
+ * budget allows, and to place emphasis at all when there is no composer output
+ * to work from.
+ */
+function heroScore(compTokens, heroToken, gapAfterMs) {
+  const text = String(heroToken.text || '').trim();
+  const key = wordKey(text);
+  if (!key) return -Infinity;
+
+  let score = 0;
+
+  // A number, price or year is almost always the point of the sentence.
+  if (/\d/.test(text)) score += 4;
+  // Longer words carry more meaning; single syllables rarely deserve the size.
+  if (key.length >= 8) score += 2;
+  else if (key.length >= 5) score += 1;
+  if (FILLER_WORDS.has(key)) score -= 6;
+
+  // A word the speaker lingered on, or landed on before a pause, is a word they
+  // were emphasising themselves.
+  const durationMs = Math.max(0, (heroToken.end_ms || 0) - (heroToken.start_ms || 0));
+  if (durationMs >= 420) score += 2;
+  else if (durationMs >= 260) score += 1;
+  if (gapAfterMs >= 400) score += 2;
+  else if (gapAfterMs >= 220) score += 1;
+
+  // A hero surrounded by nothing has no support text to play against.
+  if (compTokens.length >= 3) score += 1;
+
+  return score;
+}
+
+/**
+ * Hold the emphasis rate to the reference, whatever the composer returned.
+ *
+ * The prompt asks for a budget, but a prompt is a request and this is the
+ * guarantee. Two directions:
+ *
+ *   - Over budget: the weakest emphasis lines are demoted to plain. Strength is
+ *     scored from the hero word itself, so what survives is the numbers, names
+ *     and payoff words rather than whichever lines happened to come first.
+ *   - No emphasis at all: the best-scoring lines are promoted up to the budget.
+ *     Without this an emphasis template renders every line plain and looks
+ *     broken — which is exactly what happens on the fallback path, where there
+ *     is no composer output to carry a type at all.
+ *
+ * A composer that returns *some* emphasis under budget is left alone: choosing
+ * three moments where six were allowed is an editorial judgement worth keeping.
+ *
+ * Spacing and repetition are enforced in both directions: never two emphasised
+ * lines within MIN_PLAIN_BETWEEN_EMPHASIS of each other, and never the same word
+ * emphasised twice in one clip.
+ */
+export function enforceEmphasisBudget(compositions, tokens, options = {}) {
+  if (!Array.isArray(compositions) || compositions.length === 0) return compositions;
+
+  const secondsPer = options.secondsPerEmphasis || REFERENCE_SECONDS_PER_EMPHASIS;
+  const minGap = options.minPlainBetween === undefined
+    ? MIN_PLAIN_BETWEEN_EMPHASIS
+    : options.minPlainBetween;
+
+  const spanMs = Math.max(...compositions.map(c => c.end_ms || 0))
+    - Math.min(...compositions.map(c => c.start_ms || 0));
+  const budget = Math.max(1, Math.round(spanMs / 1000 / secondsPer));
+
+  const tokenMap = new Map((tokens || []).map(t => [t.id, t]));
+  const gapAfter = new Map();
+  for (let i = 0; i < (tokens || []).length; i++) {
+    const next = tokens[i + 1];
+    gapAfter.set(tokens[i].id, next ? Math.max(0, next.start_ms - tokens[i].end_ms) : Infinity);
+  }
+
+  const scored = compositions.map((comp, index) => {
+    const compTokens = (comp.token_ids || []).map(id => tokenMap.get(id)).filter(Boolean);
+    const hero = tokenMap.get(comp.hero_token_id);
+    return {
+      index,
+      wasEmphatic: EMPHATIC_TYPES.has(comp.comp_type),
+      word: hero ? wordKey(hero.text) : '',
+      score: hero ? heroScore(compTokens, hero, gapAfter.get(hero.id) || 0) : -Infinity
+    };
+  });
+
+  const alreadyEmphatic = scored.filter(s => s.wasEmphatic);
+  // Promote only when there is nothing to trim — see the note above.
+  const pool = alreadyEmphatic.length ? alreadyEmphatic : scored;
+
+  const chosen = [];
+  const usedWords = new Set();
+  for (const candidate of [...pool].sort((a, b) => b.score - a.score || a.index - b.index)) {
+    if (chosen.length >= budget) break;
+    // Spacing usually binds before the budget does, which leaves only a few
+    // legal positions. Without a floor, a line whose hero is a filler word gets
+    // emphasised simply because it was the last slot that fitted. Leaving the
+    // budget unspent is always better than pointing at "the" or "aap".
+    if (candidate.score < MIN_HERO_SCORE) continue;
+    if (candidate.word && usedWords.has(candidate.word)) continue;
+    if (chosen.some(c => Math.abs(c.index - candidate.index) <= minGap)) continue;
+    chosen.push(candidate);
+    if (candidate.word) usedWords.add(candidate.word);
+  }
+
+  const keep = new Set(chosen.map(c => c.index));
+  return compositions.map((comp, index) => {
+    const shouldEmphasise = keep.has(index);
+    const isEmphatic = EMPHATIC_TYPES.has(comp.comp_type);
+    if (shouldEmphasise === isEmphatic) return comp;
+    if (!shouldEmphasise) return { ...comp, comp_type: 'plain' };
+    // A promoted single-word line reads better alone than as a hero with no
+    // support text around it.
+    return { ...comp, comp_type: (comp.token_ids || []).length === 1 ? 'spotlight' : 'emphasis' };
+  });
+}
+
+// ─── Build compositions from composer output ───────────────────────────────────
+
+/**
+ * Merge the composer's grouping with the transcribed tokens.
+ *
+ * @param {Array} tokens words with ids and timestamps
+ * @param {Object} composerOutput { compositions: [{ token_ids, hero_token_id, comp_type }] }
+ * @returns {Array} compositions ready to render
+ */
+export function buildCompositions(tokens, composerOutput) {
   const tokenMap = new Map(tokens.map(t => [t.id, t]));
   const compositions = [];
 
-  if (!geminiOutput?.compositions?.length) {
-    // Fallback: if Gemini fails, create simple compositions
+  if (!composerOutput?.compositions?.length) {
     return buildFallbackCompositions(tokens);
   }
 
-  for (const comp of geminiOutput.compositions) {
+  for (const comp of composerOutput.compositions) {
     const compTokens = (comp.token_ids || [])
       .map(id => tokenMap.get(id))
       .filter(Boolean);
 
     if (!compTokens.length) continue;
 
-    const heroTokenId = comp.hero_token_id;
-    const heroIdx = compTokens.findIndex(t => t.id === heroTokenId);
+    const heroIdx = compTokens.findIndex(t => t.id === comp.hero_token_id);
     const validHeroIdx = heroIdx >= 0 ? heroIdx : Math.floor(compTokens.length / 2);
-    const actualHeroId = compTokens[validHeroIdx].id;
 
     const beforeTokens = compTokens.slice(0, validHeroIdx);
     const heroToken = compTokens[validHeroIdx];
     const afterTokens = compTokens.slice(validHeroIdx + 1);
 
-    // comp_type from Gemini: 'emphasis' | 'plain' | 'spotlight'
-    const compType = ['emphasis', 'plain', 'spotlight'].includes(comp.comp_type)
-      ? comp.comp_type
-      : 'emphasis'; // default if Gemini didn't provide
-
     compositions.push({
       id: compositions.length + 1,
       token_ids: compTokens.map(t => t.id),
-      hero_token_id: actualHeroId,
+      hero_token_id: heroToken.id,
       before_token_ids: beforeTokens.map(t => t.id),
       after_token_ids: afterTokens.map(t => t.id),
       hero_text: heroToken.text.trim(),
       before_text: joinTexts(beforeTokens),
       after_text: joinTexts(afterTokens),
-      comp_type: compType,
+      // Plain is the default when the composer did not say. Defaulting to
+      // emphasis meant a composer that omitted the field shouted every line.
+      comp_type: COMP_TYPES.has(comp.comp_type) ? comp.comp_type : 'plain',
       start_ms: compTokens[0].start_ms,
       end_ms: compTokens[compTokens.length - 1].end_ms,
       tokens: compTokens
     });
   }
 
-  return compositions;
+  return enforceEmphasisBudget(compositions, tokens);
 }
 
 /**
- * Kalakar Emphasis Randomizer
- * 
- * Not every composition gets emphasis — that would be visually exhausting.
- * This randomizer assigns comp_type to each composition:
- *   - 'emphasis' (~65%): hero word + before/after support text
- *   - 'plain' (~27%): all white text, no hero, just readable captions
- *   - 'spotlight' (~8%): single hero word alone, big and centered
- * 
- * Rules:
- *   - Max 2 consecutive emphasis compositions
- *   - Single-word compositions become spotlight if selected for emphasis
- *   - First composition is always emphasis (strong opening)
- */
-export function applyEmphasisRandomizer(compositions) {
-  const EMPHASIS_RATE = 0.65;
-  const SPOTLIGHT_RATE = 0.08;
-  // remainder is plain
-
-  let consecutiveEmphasis = 0;
-
-  for (let i = 0; i < compositions.length; i++) {
-    const comp = compositions[i];
-    
-    // First composition is always emphasis for a strong opening
-    if (i === 0) {
-      comp.comp_type = 'emphasis';
-      consecutiveEmphasis = 1;
-      continue;
-    }
-
-    const roll = Math.random();
-    const isSingleWord = comp.token_ids.length === 1;
-
-    if (consecutiveEmphasis >= 2) {
-      // Force a break — plain text to give viewer breathing room
-      comp.comp_type = 'plain';
-      consecutiveEmphasis = 0;
-    } else if (roll < SPOTLIGHT_RATE && isSingleWord) {
-      // Spotlight: single hero word, centered, dramatic
-      comp.comp_type = 'spotlight';
-      consecutiveEmphasis = 0;
-    } else if (roll < EMPHASIS_RATE) {
-      // Emphasis: hero word with before/after support
-      if (isSingleWord) {
-        // Single-word comps look better as spotlight
-        comp.comp_type = 'spotlight';
-      } else {
-        comp.comp_type = 'emphasis';
-      }
-      consecutiveEmphasis++;
-    } else {
-      // Plain: all white text, readable, no hero
-      comp.comp_type = 'plain';
-      consecutiveEmphasis = 0;
-    }
-  }
-
-  return compositions;
-}
-
-/**
- * When Gemini fails or returns nothing, create simple compositions
- * by grouping tokens into phrases based on pauses.
+ * Group tokens into lines without a composer, by breaking at speech pauses.
+ *
+ * Used when composition is unavailable or fails. The result is plainer than a
+ * composed transcript but it is still watchable, and enforceEmphasisBudget gives
+ * it emphasis at the reference rate so an emphasis template still works.
  */
 export function buildFallbackCompositions(tokens) {
   const PAUSE_THRESHOLD_MS = 400;
@@ -256,7 +243,8 @@ export function buildFallbackCompositions(tokens) {
 
   const flush = () => {
     if (!group.length) return;
-    // Pick the longest word as hero (simple heuristic)
+    // Longest word as hero: a rough stand-in for "most significant", and the
+    // budget pass rescores it properly before anything is emphasised.
     let heroIdx = 0;
     let maxLen = 0;
     for (let i = 0; i < group.length; i++) {
@@ -269,7 +257,6 @@ export function buildFallbackCompositions(tokens) {
     const beforeTokens = group.slice(0, heroIdx);
     const heroToken = group[heroIdx];
     const afterTokens = group.slice(heroIdx + 1);
-    const layoutIdx = compositions.length % LAYOUT_IDS.length;
 
     compositions.push({
       id: compositions.length + 1,
@@ -280,7 +267,7 @@ export function buildFallbackCompositions(tokens) {
       hero_text: heroToken.text.trim(),
       before_text: joinTexts(beforeTokens),
       after_text: joinTexts(afterTokens),
-      layout_id: LAYOUT_IDS[layoutIdx],
+      comp_type: 'plain',
       start_ms: group[0].start_ms,
       end_ms: group[group.length - 1].end_ms,
       tokens: [...group]
@@ -299,11 +286,11 @@ export function buildFallbackCompositions(tokens) {
   }
   flush();
 
-  return compositions;
+  return enforceEmphasisBudget(compositions, tokens);
 }
 
 /**
- * Recompute a composition when user changes the hero word.
+ * Recompute a composition after the user picks a different hero word.
  * Returns a new composition with updated before/after splits.
  */
 export function recomputeComposition(composition, newHeroTokenId, tokens) {
@@ -313,7 +300,7 @@ export function recomputeComposition(composition, newHeroTokenId, tokens) {
     .filter(Boolean);
 
   const heroIdx = compTokens.findIndex(t => t.id === newHeroTokenId);
-  if (heroIdx < 0) return composition; // token not in this composition
+  if (heroIdx < 0) return composition;
 
   const beforeTokens = compTokens.slice(0, heroIdx);
   const heroToken = compTokens[heroIdx];
@@ -330,84 +317,8 @@ export function recomputeComposition(composition, newHeroTokenId, tokens) {
   };
 }
 
-/**
- * Resolve positions for a composition's visual elements.
- * Returns { hero, before, after } with x, y, anchor for each group.
- */
-export function resolvePositions(composition) {
-  const layout = LAYOUTS[composition.layout_id] || LAYOUTS[DEFAULT_LAYOUT];
-  return layout.resolve(
-    composition.hero_text,
-    composition.before_text,
-    composition.after_text
-  );
-}
-
-/**
- * Get per-word render data for a composition.
- * Each word gets: text, x, y, startMs, endMs, isHero, style config
- * This is what both the browser preview and the canvas exporter consume.
- */
-export function getWordRenderData(composition, tokens, template = GLOW_TEMPLATE) {
-  const tokenMap = new Map(tokens.map(t => [t.id, t]));
-  const positions = resolvePositions(composition);
-  const words = [];
-  const compositionEndMs = composition.end_ms;
-
-  // Before words
-  if (positions.before && composition.before_token_ids.length) {
-    const beforeTokens = composition.before_token_ids.map(id => tokenMap.get(id)).filter(Boolean);
-    for (const token of beforeTokens) {
-      words.push({
-        tokenId: token.id,
-        text: token.text.trim(),
-        groupPosition: positions.before,
-        startMs: token.start_ms,
-        endMs: compositionEndMs,
-        isHero: false,
-        style: template.support
-      });
-    }
-  }
-
-  // Hero word
-  const heroToken = tokenMap.get(composition.hero_token_id);
-  if (heroToken) {
-    words.push({
-      tokenId: heroToken.id,
-      text: template.hero.uppercase ? heroToken.text.trim().toUpperCase() : heroToken.text.trim(),
-      groupPosition: positions.hero,
-      startMs: heroToken.start_ms,
-      endMs: compositionEndMs,
-      isHero: true,
-      style: template.hero
-    });
-  }
-
-  // After words
-  if (positions.after && composition.after_token_ids.length) {
-    const afterTokens = composition.after_token_ids.map(id => tokenMap.get(id)).filter(Boolean);
-    for (const token of afterTokens) {
-      words.push({
-        tokenId: token.id,
-        text: token.text.trim(),
-        groupPosition: positions.after,
-        startMs: token.start_ms,
-        endMs: compositionEndMs,
-        isHero: false,
-        style: template.support
-      });
-    }
-  }
-
-  return words;
-}
-
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
 function joinTexts(tokens) {
   return tokens.map(t => (t.text || '').trim()).filter(Boolean).join(' ');
 }
-
-export const CANVAS_WIDTH = CANVAS_W;
-export const CANVAS_HEIGHT = CANVAS_H;

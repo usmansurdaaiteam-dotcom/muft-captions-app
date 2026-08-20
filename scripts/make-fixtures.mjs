@@ -54,6 +54,11 @@ function buildProject() {
     contains_urdu_script: false
   }));
 
+  // Only the middle line carries emphasis. A fixture where every line is an
+  // emphasis line does not resemble real output and leaves the plain-line path
+  // — the one most lines actually take — untested.
+  const COMP_TYPES = ['plain', 'emphasis', 'plain'];
+
   const compositions = [[0, 4], [4, 8], [8, 12]].map(([from, to], index) => {
     const slice = tokens.slice(from, to);
     const hero = slice[2];
@@ -66,7 +71,7 @@ function buildProject() {
       hero_text: hero.text,
       before_text: slice.slice(0, 2).map(t => t.text).join(' '),
       after_text: slice.slice(3).map(t => t.text).join(' '),
-      comp_type: 'emphasis',
+      comp_type: COMP_TYPES[index],
       start_ms: slice[0].start_ms,
       end_ms: slice[slice.length - 1].end_ms
     };
