@@ -19,6 +19,8 @@
     "test:reference": "node scripts/check-reference-match.mjs",
     "test:reveal": "node scripts/check-word-reveal.mjs",
     "check:emphasis": "node scripts/check-emphasis-rate.mjs",
+    "check:breaks": "node scripts/check-line-breaks.mjs",
+    "recompose": "node scripts/recompose.mjs",
     "test:gemini": "node scripts/test-gemini-client.mjs",
     "test:export": "node scripts/test-export.mjs",
     "test:download": "node scripts/test-export-download.mjs",

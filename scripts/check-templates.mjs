@@ -86,6 +86,37 @@ function render(template, comp, timeMs, w = W, h = H) {
   return inkStats(ctx, w, h);
 }
 
+/**
+ * Phrases chosen to push the wrapping and shrinking logic past what an ordinary
+ * sample reaches. Tokens for these are built per phrase rather than shared.
+ */
+const STRESS_PHRASES = [
+  {
+    name: 'long',
+    words: ['bilkul', 'extraordinary', 'transformation', 'happening', 'continuously', 'everywhere', 'around', 'us']
+  },
+  { name: 'single very long word', words: ['incomprehensibilities'] },
+  { name: 'long word mid-phrase', words: ['yeh', 'internationalisation', 'hai'] }
+];
+
+function makeStressComposition(words) {
+  const stressTokens = words.map((text, i) => ({
+    id: 1000 + i,
+    text,
+    start_ms: i * 400,
+    end_ms: i * 400 + 380
+  }));
+  for (const token of stressTokens) tokenMap.set(token.id, token);
+  return {
+    id: 900,
+    token_ids: stressTokens.map(t => t.id),
+    hero_token_id: stressTokens[Math.min(1, stressTokens.length - 1)].id,
+    comp_type: 'emphasis',
+    start_ms: 0,
+    end_ms: words.length * 400
+  };
+}
+
 const failures = [];
 const warnings = [];
 const installed = new Set(FONT_FILES.map(f => f.family));
@@ -164,6 +195,25 @@ for (let i = 0; i < TEMPLATES.length; i++) {
     const heightShare = (stats.maxY - stats.minY) / aspect.h;
     if (heightShare > 0.55) {
       problems.push(`${aspect.name}: caption occupies ${(heightShare * 100).toFixed(0)}% of frame height`);
+    }
+  }
+
+  // Overflow. Auto-shrink is the only thing standing between a long phrase and
+  // a caption clipped off the side of the frame, and the cases that break it are
+  // the ones a short sample phrase never reaches: a full line of long words, and
+  // a single word too wide to fit at any sensible size.
+  for (const stress of STRESS_PHRASES) {
+    const stressComp = makeStressComposition(stress.words);
+    const stats = render(template, stressComp, stress.words.length * 400 - 100);
+    if (stats.empty) {
+      problems.push(`drew nothing for the ${stress.name} phrase`);
+      continue;
+    }
+    if (stats.minX < 0 || stats.maxX > W - 1 || stats.minY < 0 || stats.maxY > H - 1) {
+      problems.push(
+        `${stress.name} phrase overflows the frame ` +
+        `(${stats.minX},${stats.minY})-(${stats.maxX},${stats.maxY})`
+      );
     }
   }
 

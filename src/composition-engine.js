@@ -184,6 +184,107 @@ export function enforceEmphasisBudget(compositions, tokens, options = {}) {
   });
 }
 
+// ─── Line breaks ────────────────────────────────────────────────────────────────
+
+/**
+ * A pause this long is a clause or sentence boundary. A caption line that runs
+ * across one reads as though it were cut to fit rather than written.
+ */
+export const PAUSE_BREAK_MS = 300;
+
+/** More words than a viewer takes in at a glance. */
+export const MAX_WORDS_PER_LINE = 8;
+
+/**
+ * Split a run that is still too long, at its widest internal pause.
+ *
+ * Ties are broken toward the middle: splitting a nine-word run into eight and
+ * one leaves a line that flashes past, so a slightly narrower gap nearer the
+ * centre is the better break.
+ */
+function splitLongRun(run) {
+  if (run.length <= MAX_WORDS_PER_LINE) return [run];
+
+  let bestIndex = -1;
+  let bestScore = -Infinity;
+  for (let i = 1; i < run.length; i++) {
+    const gap = Math.max(0, run[i].start_ms - run[i - 1].end_ms);
+    const balance = 1 - Math.abs(i - run.length / 2) / (run.length / 2);
+    const score = gap + balance * 150;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  return [...splitLongRun(run.slice(0, bestIndex)), ...splitLongRun(run.slice(bestIndex))];
+}
+
+/**
+ * Break lines where the speech breaks, whatever the composer returned.
+ *
+ * The prompt asks for this and the answer varies run to run: composed live
+ * against a real 32-second transcript, the model returned lines averaging 6.2
+ * words with five over eight words and two running straight through a pause.
+ * None of that is visible in a still frame — it shows up only as captions that
+ * feel slightly wrong to watch — so it is worth settling here rather than hoping.
+ *
+ * A split line keeps the composer's hero if it still contains it, and otherwise
+ * takes its longest word as a placeholder; enforceEmphasisBudget rescores every
+ * candidate afterwards, so this only has to be reasonable, not final.
+ */
+export function enforceLineBreaks(compositions, tokens) {
+  if (!Array.isArray(compositions) || !compositions.length) return compositions;
+
+  const tokenMap = new Map((tokens || []).map(t => [t.id, t]));
+  const out = [];
+
+  for (const comp of compositions) {
+    const compTokens = (comp.token_ids || []).map(id => tokenMap.get(id)).filter(Boolean);
+    if (!compTokens.length) continue;
+
+    // First break at every real pause, then thin any run still over length.
+    const runs = [];
+    let run = [compTokens[0]];
+    for (let i = 1; i < compTokens.length; i++) {
+      if (compTokens[i].start_ms - compTokens[i - 1].end_ms >= PAUSE_BREAK_MS) {
+        runs.push(run);
+        run = [];
+      }
+      run.push(compTokens[i]);
+    }
+    runs.push(run);
+
+    const pieces = runs.flatMap(splitLongRun);
+
+    for (const piece of pieces) {
+      const hero = piece.find(t => t.id === comp.hero_token_id)
+        || piece.reduce((best, t) => (t.text.trim().length > best.text.trim().length ? t : best), piece[0]);
+      const heroIdx = piece.indexOf(hero);
+
+      out.push({
+        ...comp,
+        id: out.length + 1,
+        token_ids: piece.map(t => t.id),
+        hero_token_id: hero.id,
+        before_token_ids: piece.slice(0, heroIdx).map(t => t.id),
+        after_token_ids: piece.slice(heroIdx + 1).map(t => t.id),
+        hero_text: hero.text.trim(),
+        before_text: joinTexts(piece.slice(0, heroIdx)),
+        after_text: joinTexts(piece.slice(heroIdx + 1)),
+        // Only the piece that kept the composer's own hero keeps its type; the
+        // rest start plain and have to earn emphasis from the budget pass.
+        comp_type: piece.includes(tokenMap.get(comp.hero_token_id)) ? comp.comp_type : 'plain',
+        start_ms: piece[0].start_ms,
+        end_ms: piece[piece.length - 1].end_ms,
+        tokens: piece
+      });
+    }
+  }
+
+  return out;
+}
+
 // ─── Build compositions from composer output ───────────────────────────────────
 
 /**
@@ -233,7 +334,7 @@ export function buildCompositions(tokens, composerOutput) {
     });
   }
 
-  return enforceEmphasisBudget(compositions, tokens);
+  return enforceEmphasisBudget(enforceLineBreaks(compositions, tokens), tokens);
 }
 
 /**
@@ -244,8 +345,6 @@ export function buildCompositions(tokens, composerOutput) {
  * it emphasis at the reference rate so an emphasis template still works.
  */
 export function buildFallbackCompositions(tokens) {
-  const PAUSE_THRESHOLD_MS = 400;
-  const MAX_TOKENS_PER_GROUP = 8;
   const compositions = [];
   let group = [];
 
@@ -286,7 +385,7 @@ export function buildFallbackCompositions(tokens) {
   for (const token of tokens) {
     if (group.length > 0) {
       const gap = token.start_ms - group[group.length - 1].end_ms;
-      if (gap > PAUSE_THRESHOLD_MS || group.length >= MAX_TOKENS_PER_GROUP) {
+      if (gap >= PAUSE_BREAK_MS || group.length >= MAX_WORDS_PER_LINE) {
         flush();
       }
     }
@@ -294,7 +393,7 @@ export function buildFallbackCompositions(tokens) {
   }
   flush();
 
-  return enforceEmphasisBudget(compositions, tokens);
+  return enforceEmphasisBudget(enforceLineBreaks(compositions, tokens), tokens);
 }
 
 /**
