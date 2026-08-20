@@ -25,7 +25,8 @@ import {
   buildCompositions,
   buildFallbackCompositions,
   enforceEmphasisBudget,
-  REFERENCE_SECONDS_PER_EMPHASIS
+  REFERENCE_SECONDS_PER_EMPHASIS,
+  MIN_PLAIN_BETWEEN_EMPHASIS
 } from '../src/composition-engine.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,7 +35,7 @@ const PROJECTS_DIR = path.join(ROOT, 'projects');
 // than the reference is a style choice; emphasising much more often is the
 // failure this script exists to catch, so the ceiling is the tighter bound.
 const MIN_SECONDS_PER_EMPHASIS = 3.0;
-const MIN_PLAIN_BETWEEN = 2;
+const MIN_PLAIN_BETWEEN = MIN_PLAIN_BETWEEN_EMPHASIS;
 
 const EMPHATIC = new Set(['emphasis', 'spotlight']);
 

@@ -27,8 +27,16 @@
  */
 export const REFERENCE_SECONDS_PER_EMPHASIS = 4.3;
 
-/** Plain lines required between two emphasised lines. */
-export const MIN_PLAIN_BETWEEN_EMPHASIS = 2;
+/**
+ * Plain lines required between two emphasised lines.
+ *
+ * One, not two. The reference does place emphasis close together when the
+ * content is parallel — it lands "JACK" and then "MASTER" about a second apart
+ * for "jack of all trades, master of none" — so a wider gap is stricter than
+ * what is being copied and pushes the overall rate well below it. What has to be
+ * prevented is a wall of highlights, and the time budget above already does that.
+ */
+export const MIN_PLAIN_BETWEEN_EMPHASIS = 1;
 
 /** Lowest heroScore that may be emphasised at all. */
 const MIN_HERO_SCORE = 1;
