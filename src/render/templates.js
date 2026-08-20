@@ -65,6 +65,13 @@ const CENTER = { x: 0.5, y: 0.72, maxWidthPct: 0.88, maxLines: 2, align: 'center
 const LOWER = { ...CENTER, y: 0.82 };
 const MIDDLE = { ...CENTER, y: 0.55 };
 
+// Words appear as they are spoken rather than the whole line arriving at once.
+// Sampling the reference clip eight times a second shows it does this on every
+// line, plain ones included: the ink grows in steps within a line and resets at
+// the next. Positions are laid out for the finished line, so words appear in
+// place instead of the block reflowing as each one lands.
+const PROGRESSIVE = { ...CENTER, reveal: 'progressive' };
+
 // Reusable entry animations.
 const ENTER_POP = { target: 'word', type: 'pop', durationMs: 240, from: 0.6, staggerMs: 40 };
 const ENTER_UP = { target: 'word', type: 'slide_up', durationMs: 260, distance: 34, staggerMs: 50 };
@@ -81,7 +88,7 @@ export const TEMPLATES = [
     category: 'Signature',
     mode: 'karaoke',
     font: { family: 'Inter', weight: 800, size: 88, casing: 'none', lineHeight: 1.18 },
-    layout: CENTER,
+    layout: PROGRESSIVE,
     word: { fill: solid('#FFFFFF'), stroke: stroke(3), shadow: shadow(14, 4, 0.75) },
     active: { fill: solid('#00FFB2'), pop: pop(1.14), glow: glow('#00FFB2') },
     animation: ENTER_POP
@@ -118,7 +125,7 @@ export const TEMPLATES = [
     category: 'Signature',
     mode: 'hero',
     font: { family: 'Anton', weight: 400, size: 56, casing: 'upper' },
-    layout: MIDDLE,
+    layout: { ...MIDDLE, reveal: 'progressive' },
     heroSizeScale: 2.5,
     heroSupportSizeScale: 0.95,
     word: { fill: solid('#FFFFFF'), stroke: stroke(4), shadow: shadow(12, 5, 0.8) },
