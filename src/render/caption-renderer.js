@@ -315,13 +315,31 @@ function layoutSignature(template) {
     f.family, f.weight, f.size, f.casing, f.letterSpacing, f.lineHeight,
     l.x, l.y, l.maxWidthPct, l.maxLines, l.align, l.reveal,
     (template.active && template.active.sizeScale) || 1,
-    template.heroSizeScale, template.heroSupportSizeScale
+    template.heroSizeScale, template.heroSupportSizeScale,
+    template.heroCasing, template.heroSupportAlign, template.heroGapEm
   ].join('|');
+}
+
+/**
+ * Whether this composition gets the hero treatment: one word large and styled,
+ * the rest as supporting text. Only hero-mode templates do it, and only on the
+ * lines the composer actually marked as carrying emphasis — a `plain` line in a
+ * hero template is an ordinary subtitle with no highlighted word at all.
+ */
+function heroApplies(comp, template) {
+  if (!template || template.mode !== 'hero') return false;
+  const type = (comp && comp.comp_type) || 'emphasis';
+  return type === 'emphasis' || type === 'spotlight';
 }
 
 /** Text for a token after casing, plus its timing. */
 function displayWords(comp, tokenMap, template) {
   const casing = (template.font && template.font.casing) || 'none';
+  // The hero word can be cased independently of the words around it, which is
+  // how a template shouts one word in caps while the support text stays as
+  // spoken.
+  const heroCasing = template.heroCasing || casing;
+  const heroStyled = heroApplies(comp, template);
   const ids = comp.token_ids || [];
   const words = [];
   for (const id of ids) {
@@ -329,12 +347,13 @@ function displayWords(comp, tokenMap, template) {
     if (!token) continue;
     const raw = String(token.text || '').trim();
     if (!raw) continue;
+    const isHero = id === comp.hero_token_id;
     words.push({
       id,
-      text: applyCasing(raw, casing),
+      text: applyCasing(raw, isHero && heroStyled ? heroCasing : casing),
       startMs: token.start_ms,
       endMs: token.end_ms,
-      isHero: id === comp.hero_token_id
+      isHero
     });
   }
   return words;
@@ -484,8 +503,8 @@ function layoutComposition(ctx, comp, tokenMap, template, width, height) {
   const placed = [];
   const lineBoxes = [];
 
-  if (template.mode === 'hero' && compType === 'emphasis' && effectiveWords.some(w => w.isHero)) {
-    placeHeroLayout(ctx, effectiveWords, template, baseSize, scale, centerX, centerY, placed);
+  if (heroApplies(comp, template) && compType === 'emphasis' && effectiveWords.some(w => w.isHero)) {
+    placeHeroLayout(ctx, effectiveWords, template, baseSize, scale, maxWidth, centerX, centerY, placed);
   } else {
     placeKaraokeLayout(
       ctx, effectiveWords, template, baseSize, scale, maxWidth, maxLines,
@@ -527,31 +546,50 @@ function placeKaraokeLayout(ctx, words, template, baseSize, scale, maxWidth, max
 }
 
 /**
- * Hero layout: the emphasised word large in the middle, the words before it on
- * a line above aligned to the hero's left edge, and the words after it on a
- * line below aligned to its right edge.
+ * Hero layout: the emphasised word large, the words spoken before it on a line
+ * above and the words spoken after it on a line below.
+ *
+ * Geometry follows what the reference style actually does, measured frame by
+ * frame: the hero is horizontally centred at a fixed size (it does not grow or
+ * shrink to fill the width), the support lines align to the hero's left edge,
+ * and the whole stack is centred on the vertical anchor — so the hero sits a
+ * little lower when there are words above it and a little higher when there are
+ * words below, rather than being pinned in place while the support text moves.
  *
  * The hero's size multiplier lives at the template level rather than in the
  * `active` style because layout has to know the real size to place the lines,
  * whereas `active.sizeScale` is an animated in-place effect applied at draw
  * time. Keeping them separate stops the two from multiplying together.
  */
-function placeHeroLayout(ctx, words, template, baseSize, scale, centerX, centerY, out) {
+function placeHeroLayout(ctx, words, template, baseSize, scale, maxWidth, centerX, centerY, out) {
   const family = template.font.family;
   const weight = template.font.weight;
   const heroScale = template.heroSizeScale === undefined ? 1.8 : template.heroSizeScale;
   const supportScale = template.heroSupportSizeScale === undefined ? 1 : template.heroSupportSizeScale;
+  const supportAlign = template.heroSupportAlign || 'left';
+  const gapEm = template.heroGapEm === undefined ? 0.16 : template.heroGapEm;
 
   const heroIdx = words.findIndex(w => w.isHero);
   const hero = words[heroIdx];
   const before = words.slice(0, heroIdx);
   const after = words.slice(heroIdx + 1);
 
-  const heroSize = baseSize * heroScale;
-  const supportSize = baseSize * supportScale;
+  let heroSize = baseSize * heroScale;
+  let supportSize = baseSize * supportScale;
 
+  // The hero is authored at a fixed size and normally left to run wide, but a
+  // long word still has to stay inside the frame, so shrink the whole stack
+  // proportionally if it would not fit. Scaling the support text by the same
+  // factor keeps the size relationship between them intact.
   ctx.font = fontFor(hero.text, family, weight, heroSize);
-  const heroWidth = ctx.measureText(hero.text).width;
+  let heroWidth = ctx.measureText(hero.text).width;
+  if (heroWidth > maxWidth) {
+    const shrink = maxWidth / heroWidth;
+    heroSize *= shrink;
+    supportSize *= shrink;
+    ctx.font = fontFor(hero.text, family, weight, heroSize);
+    heroWidth = ctx.measureText(hero.text).width;
+  }
 
   ctx.font = fontFor(' ', family, weight, supportSize);
   const spaceWidth = ctx.measureText(' ').width || supportSize * 0.28;
@@ -564,15 +602,40 @@ function placeHeroLayout(ctx, words, template, baseSize, scale, centerX, centerY
   const beforeWords = measure(before);
   const afterWords = measure(after);
 
-  const gap = supportSize * 0.35;
-  const heroY = centerY;
-  const beforeY = heroY - heroSize * 0.5 - supportSize * 0.5 - gap;
-  const afterY = heroY + heroSize * 0.5 + supportSize * 0.5 + gap;
+  const lineWidth = (list) => list.reduce((sum, w) => sum + w.width, 0)
+    + Math.max(0, list.length - 1) * spaceWidth;
+
+  // Vertical layout, in ink terms: cap height for the hero (it is the tallest
+  // thing on its line) and a full em for the support lines.
+  const gap = heroSize * gapEm;
+  const heroBand = heroSize * 0.74;
+  const supportBand = supportSize * 0.8;
+
+  const stackHeight = heroBand
+    + (beforeWords.length ? supportBand + gap : 0)
+    + (afterWords.length ? supportBand + gap : 0);
+  const stackTop = centerY - stackHeight / 2;
+
+  let cursorY = stackTop;
+  const beforeY = beforeWords.length ? cursorY + supportBand / 2 : 0;
+  if (beforeWords.length) cursorY += supportBand + gap;
+  const heroY = cursorY + heroBand / 2;
+  cursorY += heroBand + gap;
+  const afterY = cursorY + supportBand / 2;
 
   const heroLeft = centerX - heroWidth / 2;
   const heroRight = centerX + heroWidth / 2;
 
-  let x = heroLeft;
+  // 'left' aligns both support lines to the hero's left edge, which is what the
+  // reference does. 'edges' fans them out — before-text on the left, after-text
+  // on the right — for a more diagonal arrangement.
+  const startX = (list) => {
+    if (supportAlign === 'center') return centerX - lineWidth(list) / 2;
+    if (supportAlign === 'edges' && list === afterWords) return heroRight - lineWidth(list);
+    return heroLeft;
+  };
+
+  let x = startX(beforeWords);
   for (const word of beforeWords) {
     out.push({ ...word, x, y: beforeY });
     x += word.width + spaceWidth;
@@ -580,9 +643,7 @@ function placeHeroLayout(ctx, words, template, baseSize, scale, centerX, centerY
 
   out.push({ ...hero, x: heroLeft, y: heroY, size: heroSize, width: heroWidth });
 
-  const afterTotal = afterWords.reduce((sum, w) => sum + w.width, 0)
-    + Math.max(0, afterWords.length - 1) * spaceWidth;
-  x = heroRight - afterTotal;
+  x = startX(afterWords);
   for (const word of afterWords) {
     out.push({ ...word, x, y: afterY });
     x += word.width + spaceWidth;
@@ -905,6 +966,7 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, baseTemp
   const pendingStyle = template.pending ? resolveStyle(template, 'pending') : null;
   const spokenStyle = template.spoken ? resolveStyle(template, 'spoken') : null;
   const heroStyle = template.mode === 'hero' ? resolveStyle(template, 'active') : activeStyle;
+  const heroLine = heroApplies(comp, template);
 
   for (let i = 0; i < laid.words.length; i++) {
     const word = laid.words[i];
@@ -915,11 +977,17 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, baseTemp
     const isSpoken = timeMs >= word.endMs;
 
     let style;
-    if (template.mode === 'hero') {
-      // In hero mode the chosen word is styled for the whole composition, not
-      // only while it is being spoken.
+    if (heroLine) {
+      // On an emphasis line the chosen word is styled for the whole
+      // composition, not only while it is being spoken.
       style = word.isHero ? heroStyle : baseStyle;
       if (!word.isHero && isPending && pendingStyle) style = pendingStyle;
+    } else if (template.mode === 'hero') {
+      // A plain line in a hero template is an ordinary subtitle: every word in
+      // the base style, nothing picked out. Highlighting a word here anyway is
+      // what makes an emphasis style feel relentless — the quiet lines are what
+      // give the loud ones their impact.
+      style = isPending && pendingStyle ? pendingStyle : baseStyle;
     } else if (isActive) {
       const from = isPending && pendingStyle ? pendingStyle : baseStyle;
       style = lerpStyle(from, activeStyle, activeBlend(template, word, timeMs));
@@ -946,9 +1014,7 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, baseTemp
     }
 
     const animation = evalAnimation(anim, timeMs - animStart);
-    if (template.mode !== 'hero' && isActive) {
-      animation.scale = (animation.scale || 1) * activeKick(template, word, timeMs);
-    } else if (template.mode === 'hero' && word.isHero) {
+    if (heroLine ? word.isHero : isActive) {
       animation.scale = (animation.scale || 1) * activeKick(template, word, timeMs);
     }
 

@@ -24,6 +24,13 @@
  * animation             { target: 'word'|'line', type, durationMs, ... }
  * heroSizeScale         hero mode only: hero word size multiplier
  * heroSupportSizeScale  hero mode only: surrounding word size multiplier
+ * heroCasing            hero mode only: casing for the hero word alone, so it
+ *                       can shout in caps while support text stays as spoken
+ * heroSupportAlign      hero mode only: 'left' (both support lines align to the
+ *                       hero's left edge), 'edges' (before-text left, after-text
+ *                       right, for a diagonal look) or 'center'
+ * heroGapEm             hero mode only: gap between hero and support lines, in
+ *                       hero-em units
  *
  * Style block fields: fill, stroke, shadow, glow, background, extrude,
  * underline, sizeScale, pop, opacity, blur, offsetY.
@@ -37,7 +44,6 @@
 
 const solid = color => ({ type: 'solid', color });
 const gradient = (stops, angle = 90) => ({ type: 'gradient', stops, angle });
-const depth = color => ({ type: 'depth', color });
 
 const stroke = (width, color = '#000000') => ({ width, color });
 
@@ -81,22 +87,30 @@ export const TEMPLATES = [
     animation: ENTER_POP
   },
   {
+    // Geometry and colour here are measured off the reference style frame by
+    // frame rather than guessed: hero cap height is a constant 8.0% of the frame
+    // height (so 211px against this 1920-tall design canvas), support text sits
+    // at 0.37x the hero, the stack is centred at 45% of the frame height, and
+    // the hero green reads #9FD83A across every hero word in the reference.
     id: 'muft-glow-hero',
     name: 'Muft Glow (Hero)',
     category: 'Signature',
     mode: 'hero',
-    font: { family: 'Inter', weight: 900, size: 58, casing: 'none' },
-    layout: MIDDLE,
-    heroSizeScale: 2.3,
+    font: { family: 'Inter', weight: 900, size: 78, casing: 'none' },
+    layout: { x: 0.5, y: 0.45, maxWidthPct: 0.92, maxLines: 2, align: 'center', reveal: 'progressive' },
+    heroSizeScale: 2.7,
     heroSupportSizeScale: 1,
-    word: { fill: solid('#FFFFFF'), shadow: shadow(18, 4, 0.85), glow: glow('#FFFFFF', [{ blur: 22, opacity: 0.28 }]) },
+    heroCasing: 'upper',
+    heroSupportAlign: 'left',
+    heroGapEm: 0.1,
+    word: { fill: solid('#FFFFFF'), shadow: shadow(16, 4, 0.6) },
     active: {
-      fill: depth('#F5B942'),
-      glow: glow('#F5B942', [{ blur: 46, opacity: 0.35 }, { blur: 20, opacity: 0.7 }]),
-      shadow: shadow(16, 5, 0.4),
-      pop: pop(1.08, 220)
+      fill: solid('#9FD83A'),
+      glow: glow('#9FD83A', [{ blur: 30, opacity: 0.5 }, { blur: 13, opacity: 0.75 }]),
+      shadow: shadow(18, 6, 0.35),
+      pop: pop(1.06, 200)
     },
-    animation: { target: 'line', type: 'pop', durationMs: 280, from: 0.8 }
+    animation: { target: 'word', type: 'pop', durationMs: 240, from: 0.74, overshoot: 1.6 }
   },
   {
     id: 'muft-hero-impact',
@@ -555,7 +569,10 @@ export function normalizeTemplate(template) {
     animation: template.animation || { target: 'word', type: 'pop', durationMs: 240 },
     activeTransitionMs: template.activeTransitionMs === undefined ? 90 : template.activeTransitionMs,
     heroSizeScale: template.heroSizeScale === undefined ? 1.8 : template.heroSizeScale,
-    heroSupportSizeScale: template.heroSupportSizeScale === undefined ? 1 : template.heroSupportSizeScale
+    heroSupportSizeScale: template.heroSupportSizeScale === undefined ? 1 : template.heroSupportSizeScale,
+    heroCasing: template.heroCasing || font.casing || 'none',
+    heroSupportAlign: template.heroSupportAlign || 'left',
+    heroGapEm: template.heroGapEm === undefined ? 0.16 : template.heroGapEm
   };
 }
 
