@@ -122,6 +122,7 @@ const DEFAULT_STYLE = {
   stroke: null,
   shadow: null,
   glow: null,
+  ambient: null,
   background: null
 };
 
@@ -130,7 +131,7 @@ function mergeStyle(base, override) {
   const merged = { ...base, ...override };
   // Nested blocks merge rather than replace, so `active` can tweak one shadow
   // property without restating the whole shadow.
-  for (const key of ['fill', 'stroke', 'shadow', 'glow', 'background']) {
+  for (const key of ['fill', 'stroke', 'shadow', 'glow', 'ambient', 'background']) {
     if (override[key] === null) {
       merged[key] = null;
     } else if (override[key] && base[key]) {
@@ -316,7 +317,8 @@ function layoutSignature(template) {
     l.x, l.y, l.maxWidthPct, l.maxLines, l.align, l.reveal,
     (template.active && template.active.sizeScale) || 1,
     template.heroSizeScale, template.heroSupportSizeScale,
-    template.heroCasing, template.heroSupportAlign, template.heroGapEm
+    template.heroCasing, template.heroSupportAlign, template.heroGapEm,
+    template.heroSupportWeight
   ].join('|');
 }
 
@@ -372,7 +374,13 @@ function displayWords(comp, tokenMap, template) {
     if (!raw) continue;
     const isHero = id === comp.hero_token_id;
     const override = wordOverrideFor(comp, id);
+    const isSupport = heroStyled && !isHero;
     const lineCasing = isHero && heroStyled ? heroCasing : casing;
+    // Support text can sit a weight below the hero, which is how a style pairs a
+    // Black hero with ExtraBold words around it.
+    const roleWeight = isSupport && template.heroSupportWeight
+      ? template.heroSupportWeight
+      : template.font.weight;
     words.push({
       id,
       text: applyCasing(raw, (override && override.casing) || lineCasing),
@@ -381,7 +389,7 @@ function displayWords(comp, tokenMap, template) {
       isHero,
       override,
       family: (override && override.fontFamily) || template.font.family,
-      weight: (override && override.fontWeight) || template.font.weight,
+      weight: (override && override.fontWeight) || roleWeight,
       sizeScale: (override && Number(override.sizeScale)) || 1
     });
   }
@@ -640,7 +648,10 @@ function placeHeroLayout(ctx, words, template, baseSize, scale, maxWidth, center
     heroWidth = ctx.measureText(hero.text).width;
   }
 
-  ctx.font = fontFor(' ', family, weight, supportSize);
+  // Support words may carry their own weight, so the space between them is
+  // measured at that weight rather than the hero's.
+  const supportWeight = (before[0] && before[0].weight) || (after[0] && after[0].weight) || weight;
+  ctx.font = fontFor(' ', family, supportWeight, supportSize);
   const spaceWidth = ctx.measureText(' ').width || supportSize * 0.28;
 
   const measure = (list) => list.map(word => {
@@ -725,18 +736,67 @@ function buildFill(ctx, style, box) {
   }
 
   if (fill.type === 'depth') {
-    // Soft centre-lit fill that gives heavy display text a sense of volume.
-    const gradient = ctx.createRadialGradient(
-      box.x + box.width / 2, box.y, 0,
-      box.x + box.width / 2, box.y, Math.max(box.width * 0.65, box.height)
-    );
-    gradient.addColorStop(0, shade(fill.color, 0.45));
-    gradient.addColorStop(0.55, fill.color);
-    gradient.addColorStop(1, shade(fill.color, -0.2));
+    // Lit from the middle: white at the centre of the word, easing out through a
+    // lightened tint to the base colour, and a shade darker at the outer edge.
+    //
+    // This is what makes a large coloured word look like it is emitting light
+    // rather than painted on. Measured across the reference's hero word, luma
+    // climbs from 178 at the outer letters to 199 at the middle while saturation
+    // falls from 143 to 90 — the signature of a white core.
+    const centreX = box.x + box.width / 2;
+    // Centre on the glyph body rather than the baseline, or the bright core sits
+    // low and clips the descenders.
+    const centreY = box.y - (box.ascent - box.descent) / 2;
+    // How far toward white the very centre goes. Fitted rather than assumed: a
+    // pure white core lifts the middle of the word about twice as much as the
+    // reference does.
+    const core = fill.core === undefined ? 0.55 : fill.core;
+    const gradient = ctx.createRadialGradient(centreX, centreY, 0, centreX, centreY, box.width * 0.65);
+    gradient.addColorStop(0, shade(fill.color, core));
+    gradient.addColorStop(0.2, shade(fill.color, core * 0.5));
+    gradient.addColorStop(0.65, fill.color);
+    gradient.addColorStop(1, shade(fill.color, -0.14));
     return gradient;
   }
 
   return fill.color || '#FFFFFF';
+}
+
+/**
+ * A soft pool of coloured light centred on the word, painted before it.
+ *
+ * Separate from `glow`, and the difference is the whole point. A glow is built
+ * from blurred copies of the letters, so it follows their shape and stays close
+ * to them. An ambient pool ignores the letterforms entirely: it is a round wash
+ * of light on the scene, brightest at the middle of the word and fading out well
+ * past it. Only the second one reads as the caption lighting the footage.
+ *
+ * The radius follows the word rather than being fixed, so a short word gets a
+ * tight pool and a long one gets a wide one, capped so it cannot wash out the
+ * whole frame.
+ */
+function drawAmbientGlow(ctx, ambient, box, size, scale) {
+  if (!ambient || ambient.enabled === false) return;
+
+  const stops = Array.isArray(ambient.stops) && ambient.stops.length
+    ? ambient.stops
+    : [[0, 0.5], [0.35, 0.2], [1, 0]];
+  const maxRadius = (ambient.maxRadius === undefined ? 280 : ambient.maxRadius) * scale;
+  const radius = Math.min(maxRadius, Math.max(box.width * 0.75, size * 1.5));
+  if (radius <= 0) return;
+
+  const centreX = box.x + box.width / 2;
+  const centreY = box.y - (box.ascent - box.descent) / 2;
+
+  const gradient = ctx.createRadialGradient(centreX, centreY, 0, centreX, centreY, radius);
+  for (const [offset, alpha] of stops) {
+    gradient.addColorStop(clamp(offset, 0, 1), withAlpha(ambient.color || '#FFFFFF', alpha));
+  }
+
+  ctx.save();
+  ctx.fillStyle = gradient;
+  ctx.fillRect(centreX - radius, centreY - radius, radius * 2, radius * 2);
+  ctx.restore();
 }
 
 function drawBackground(ctx, style, box, scale) {
@@ -884,6 +944,7 @@ function drawWord(ctx, word, style, template, scale, anim) {
   ctx.globalAlpha = alpha;
   if (style.blur > 0) ctx.filter = `blur(${style.blur * scale}px)`;
 
+  drawAmbientGlow(ctx, style.ambient, box, size, scale);
   drawBackground(ctx, style, box, scale);
 
   // Glow: soft halo built from blurred copies of the word behind it.
@@ -1060,6 +1121,7 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, baseTemp
     if (word.override && word.override.color) {
       style = { ...style, fill: recolorFill(style.fill, word.override.color) };
       if (style.glow) style.glow = { ...style.glow, color: word.override.color };
+      if (style.ambient) style.ambient = { ...style.ambient, color: word.override.color };
     }
 
     // With reveal 'all' the whole phrase is on screen for the composition, so

@@ -109,12 +109,15 @@ async function fit(style, showCount) {
   };
   const plate = await loadImage(style.plate);
 
-  const render = glow => {
+  const render = (glow, ambientOverride) => {
     const template = getTemplate(style.id);
     // Both states carry the glow: a style where every word is coloured has no
     // separate highlight, so the glow has to be on the base word too.
     template.word = { ...template.word, glow };
     template.active = { ...template.active, glow };
+    if (ambientOverride !== undefined) {
+      template.active = { ...template.active, ambient: ambientOverride };
+    }
 
     const layer = createCanvas(w, h);
     clearLayoutCache();
@@ -137,6 +140,38 @@ async function fit(style, showCount) {
     return total;
   };
 
+  const existing = getTemplate(style.id);
+  const currentGlow = (existing.active && existing.active.glow) || null;
+  const currentAmbient = (existing.active && existing.active.ambient) || null;
+  const currentProfile = render(currentGlow || { color: style.colour, passes: [] }, currentAmbient);
+
+  // Two stages rather than one big grid. The pool and the halo act at different
+  // distances — the pool sets how far light carries, the halo how bright it is
+  // right at the letters — so fitting them in turn finds the same answer as a
+  // combined sweep for a fraction of the renders.
+  let bestAmbient = currentAmbient;
+  if (currentAmbient) {
+    const ambientCandidates = [];
+    for (const centre of [0.25, 0.35, 0.45, 0.55]) {
+      for (const mid of [0.08, 0.12, 0.16, 0.22]) {
+        for (const maxRadius of [140, 180, 220, 280]) {
+          ambientCandidates.push({
+            color: currentAmbient.color,
+            stops: [[0, centre], [0.35, mid], [1, 0]],
+            maxRadius
+          });
+        }
+      }
+    }
+    const ambientResults = ambientCandidates
+      .map(a => ({ a, score: score(render(currentGlow, a)) }))
+      .sort((x, y) => x.score - y.score);
+    bestAmbient = ambientResults[0].a;
+    console.log(`\n  ${style.label} — ambient pool: centre ${bestAmbient.stops[0][1]}, ` +
+      `mid ${bestAmbient.stops[1][1]}, radius cap ${bestAmbient.maxRadius} ` +
+      `(error ${score(render(currentGlow, currentAmbient)).toFixed(0)} -> ${ambientResults[0].score.toFixed(0)})`);
+  }
+
   const candidates = [];
   for (const blurOuter of [20, 30, 40, 58, 70, 85, 100, 120, 145]) {
     for (const opacityOuter of [0.2, 0.3, 0.45, 0.6, 0.75, 0.9]) {
@@ -153,14 +188,11 @@ async function fit(style, showCount) {
 
   const results = candidates
     .map(passes => {
-      const profile = render({ color: style.colour, passes });
+      const glowSpec = { color: style.colour, passes };
+      const profile = render(glowSpec, bestAmbient);
       return { passes, profile, score: score(profile) };
     })
     .sort((a, b) => a.score - b.score);
-
-  const existing = getTemplate(style.id);
-  const currentGlow = (existing.active && existing.active.glow) || null;
-  const currentProfile = currentGlow ? render(currentGlow) : render({ color: style.colour, passes: [] });
 
   const row = (label, profile) =>
     `  ${label.padEnd(24)}` + profile.map(v => v.toFixed(1).padStart(7)).join('');

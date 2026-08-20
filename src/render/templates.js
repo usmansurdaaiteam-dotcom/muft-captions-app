@@ -26,6 +26,8 @@
  * heroSupportSizeScale  hero mode only: surrounding word size multiplier
  * heroCasing            hero mode only: casing for the hero word alone, so it
  *                       can shout in caps while support text stays as spoken
+ * heroSupportWeight     hero mode only: weight for the support words, so they
+ *                       can sit a step below a heavier hero
  * heroSupportAlign      hero mode only: 'left' (both support lines align to the
  *                       hero's left edge), 'edges' (before-text left, after-text
  *                       right, for a diagonal look) or 'center'
@@ -44,6 +46,15 @@
 
 const solid = color => ({ type: 'solid', color });
 const gradient = (stops, angle = 90) => ({ type: 'gradient', stops, angle });
+/** Fill lit from the middle of the word: white core easing out to the colour. */
+const centreLit = (color, core) => ({ type: 'depth', color, core });
+
+/**
+ * A round pool of light on the scene, centred on the word and ignoring its
+ * letterforms. This is the part that reads as the caption lighting the footage,
+ * as opposed to `glow`, which follows the shape of the letters.
+ */
+const ambient = (color, stops, maxRadius = 280) => ({ color, stops, maxRadius });
 
 const stroke = (width, color = '#000000') => ({ width, color });
 
@@ -108,19 +119,36 @@ export const TEMPLATES = [
     heroSizeScale: 2.7,
     heroSupportSizeScale: 1,
     heroCasing: 'upper',
+    // Support text a weight below the hero, pairing Black with ExtraBold as the
+    // original did.
+    heroSupportWeight: 800,
     heroSupportAlign: 'left',
     heroGapEm: 0.1,
-    word: { fill: solid('#FFFFFF'), shadow: shadow(16, 4, 0.6) },
+    // The glow is two things, and it needs to be both. An ambient pool lights
+    // the footage around the word, and a tight halo follows the letterforms. A
+    // halo on its own only ever reads as a soft edge — which is what this looked
+    // like when it had one and not the other.
+    //
+    // Support text glows too, in white. Every word carries light in this style,
+    // not just the emphasised one.
+    word: {
+      fill: solid('#FFFFFF'),
+      shadow: shadow(15, 5, 0.35, '#000000', 5),
+      ambient: ambient('#FFFFFF', [[0, 0.35], [0.4, 0.12], [1, 0]], 220),
+      glow: glow('#FFFFFF', [{ blur: 40, opacity: 0.5 }])
+    },
     active: {
-      fill: solid('#9FD83A'),
-      // Fitted to the halo measured off the reference rather than chosen by eye
-      // — see scripts/tune-glow.mjs. What reads as a glow is how far the light
-      // carries and how gradually it fades, not how bright it is against the
-      // letters, so a tight bright halo looks like a soft edge and nothing more.
-      // The reference carries green about 12px above the cap line at a 501-tall
-      // frame; the previous settings died after 4.
-      glow: glow('#9FD83A', [{ blur: 120, opacity: 0.45 }, { blur: 30, opacity: 0.8 }]),
-      shadow: shadow(18, 6, 0.35),
+      // Lit from the middle of the word, easing out to the green. Measured
+      // across the reference's hero: luma rises 20 from the outer letters to the
+      // middle while saturation falls 41. A pure white core, which is what the
+      // original used, lifts it nearly three times that much — 0.35 is the value
+      // that reproduces the reference's own reading.
+      fill: centreLit('#9FD83A', 0.35),
+      ambient: ambient('#9FD83A', [[0, 0.55], [0.35, 0.22], [1, 0]], 280),
+      // Tight halo on top of the pool. Fitted so the two together match the
+      // falloff measured off the reference — see scripts/tune-glow.mjs.
+      glow: glow('#9FD83A', [{ blur: 40, opacity: 0.2 }, { blur: 30, opacity: 0.7 }]),
+      shadow: shadow(15, 5, 0.35, '#000000', 5),
       pop: pop(1.06, 200)
     },
     animation: { target: 'word', type: 'pop', durationMs: 240, from: 0.74, overshoot: 1.6 }
@@ -649,6 +677,7 @@ export function normalizeTemplate(template) {
     heroSizeScale: template.heroSizeScale === undefined ? 1.8 : template.heroSizeScale,
     heroSupportSizeScale: template.heroSupportSizeScale === undefined ? 1 : template.heroSupportSizeScale,
     heroCasing: template.heroCasing || font.casing || 'none',
+    heroSupportWeight: template.heroSupportWeight || null,
     heroSupportAlign: template.heroSupportAlign || 'left',
     heroGapEm: template.heroGapEm === undefined ? 0.16 : template.heroGapEm
   };

@@ -94,6 +94,24 @@ const REFERENCE = {
   heroColorTolerance: 12
 };
 
+/**
+ * The two things that make this style read as glowing, both measured off the
+ * reference and both of which were missing at one point:
+ *
+ *   the hero word is lit from the middle, easing out to the colour. Across the
+ *   reference's hero, luma climbs 20 from the outer letters to the middle while
+ *   saturation falls 41. A flat fill reads as painted on rather than emitting
+ *   light; too strong a core reads as washed out.
+ *
+ *   light spills onto the footage around the caption, not just around the
+ *   letterforms, and every word carries it rather than only the emphasised one.
+ */
+const LIGHT = {
+  coreLumaRise: { value: 20.4, tol: 8, unit: 'luma, centre minus edge' },
+  coreSaturationDrop: { value: -40.6, tol: 14, unit: 'saturation, centre minus edge' },
+  supportCarriesLight: { value: true, unit: '' }
+};
+
 const METRICS = [
   ['heroCapHeightPct', 'hero cap height'],
   ['heroCentreXPct', 'hero centre offset'],
@@ -188,6 +206,81 @@ function measureFrame(data, width, height, heroRgb) {
 
 // ─── Rendering a reference phrase with our own template ────────────────────────
 
+/**
+ * Sample the hero's fill from the middle of the word outward, and check whether
+ * any light lands on the frame away from the support word's letters.
+ */
+function measureLight(data, width, height, heroRgb) {
+  const at = (x, y) => {
+    const p = (y * width + x) * 4;
+    return [data[p], data[p + 1], data[p + 2], data[p + 3]];
+  };
+
+  const isHeroInk = (r, g, b, a) => {
+    if (a <= 220) return false;
+    const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+    // Brightness and hue direction, not hue dominance: requiring green to beat
+    // red would drop the very pixels the core lightens, and under-report it.
+    return luma > 150 && g >= b + 25 && g >= r - 40 && g > heroRgb[1] - 90;
+  };
+
+  // Columns holding hero ink, so the fill can be sampled by distance from the
+  // word's own centre.
+  const columns = [];
+  for (let x = 0; x < width; x++) {
+    const hits = [];
+    for (let y = 0; y < height; y++) {
+      const [r, g, b, a] = at(x, y);
+      if (isHeroInk(r, g, b, a)) hits.push([r, g, b]);
+    }
+    if (hits.length >= 6) columns.push({ x, hits });
+  }
+  if (columns.length < 20) return null;
+
+  const first = columns[0].x;
+  const last = columns[columns.length - 1].x;
+  const centre = (first + last) / 2;
+  const half = Math.max(1, (last - first) / 2);
+
+  const band = (lo, hi) => {
+    const all = columns
+      .filter(c => {
+        const frac = Math.abs(c.x - centre) / half;
+        return frac >= lo && frac < hi;
+      })
+      .flatMap(c => c.hits);
+    if (!all.length) return null;
+    const avg = all
+      .reduce((s, p) => [s[0] + p[0], s[1] + p[1], s[2] + p[2]], [0, 0, 0])
+      .map(v => v / all.length);
+    return {
+      luma: 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2],
+      saturation: Math.max(...avg) - Math.min(...avg)
+    };
+  };
+
+  const core = band(0, 0.15);
+  const edge = band(0.85, 1.01);
+  if (!core || !edge) return null;
+
+  // Light on the frame away from any letters: sample a ring outside the caption's
+  // own ink and see whether anything was painted there at all.
+  let spill = 0;
+  const step = 3;
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const [, , , a] = at(x, y);
+      if (a > 4 && a < 90) spill++;
+    }
+  }
+
+  return {
+    coreLumaRise: core.luma - edge.luma,
+    coreSaturationDrop: core.saturation - edge.saturation,
+    spill
+  };
+}
+
 function buildScene(phrase) {
   const tokens = phrase.words.map((text, i) => ({
     id: i + 1,
@@ -280,6 +373,59 @@ async function run() {
       console.log(`    ${ok ? 'ok  ' : 'FAIL'} ${name.padEnd(34)} reference ${want.toFixed(2).padStart(6)}%   ` +
         `ours ${got.toFixed(2).padStart(6)}%   ${delta >= 0 ? '+' : ''}${delta.toFixed(2)}` +
         `   (tol ${REFERENCE.tolerance[key]})`);
+    }
+  }
+
+  // ── Fill and light ───────────────────────────────────────────────────────────
+
+  const { tokenMap: lightTokens, comp: lightComp } = buildScene(REFERENCE.phrases[2]);
+  clearLayoutCache();
+  ctx.clearRect(0, 0, W, H);
+  renderCaptionFrame(ctx, lightComp.end_ms - 10, [lightComp], lightTokens, template, W, H);
+  const light = measureLight(ctx.getImageData(0, 0, W, H).data, W, H, REFERENCE.heroColor);
+
+  // A support word on its own, to check light is not reserved for the hero.
+  const supportOnly = {
+    ...lightComp,
+    id: 99,
+    token_ids: [lightComp.token_ids[0]],
+    hero_token_id: -1,
+    comp_type: 'plain'
+  };
+  clearLayoutCache();
+  ctx.clearRect(0, 0, W, H);
+  renderCaptionFrame(ctx, lightComp.end_ms - 10, [supportOnly], lightTokens, template, W, H);
+  const supportData = ctx.getImageData(0, 0, W, H).data;
+  let supportSpill = 0;
+  for (let i = 3; i < supportData.length; i += 4 * 3) {
+    if (supportData[i] > 4 && supportData[i] < 90) supportSpill++;
+  }
+
+  console.log('\n  fill and light');
+  if (!light) {
+    failures++;
+    console.log('    FAIL could not sample the hero fill');
+  } else {
+    const readings = {
+      coreLumaRise: light.coreLumaRise,
+      coreSaturationDrop: light.coreSaturationDrop,
+      supportCarriesLight: supportSpill > 400
+    };
+    for (const [key, spec] of Object.entries(LIGHT)) {
+      const got = readings[key];
+      let ok, refText, gotText;
+      if (typeof spec.value === 'boolean') {
+        ok = got === spec.value;
+        refText = String(spec.value);
+        gotText = `${got} (${supportSpill} lit pixels off the letters)`;
+      } else {
+        ok = Math.abs(got - spec.value) <= spec.tol;
+        refText = spec.value.toFixed(1);
+        gotText = got.toFixed(1);
+      }
+      if (!ok) failures++;
+      console.log(`    ${ok ? 'ok  ' : 'FAIL'} ${key.padEnd(22)} reference ${refText.padStart(7)}   ` +
+        `ours ${String(gotText).padStart(7)}   ${spec.unit}`);
     }
   }
 
