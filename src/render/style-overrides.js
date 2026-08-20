@@ -28,7 +28,7 @@ export const OVERRIDE_KEYS = [
 const isSet = value => value !== undefined && value !== null && value !== '';
 
 /** Replace a fill's colour while preserving gradient stops where sensible. */
-function recolorFill(fill, color) {
+export function recolorFill(fill, color) {
   if (!fill) return { type: 'solid', color };
   if (fill.type === 'gradient' && Array.isArray(fill.stops) && fill.stops.length) {
     // Only the first stop is user-editable; keeping the rest preserves the
@@ -155,6 +155,43 @@ export function sanitizeOverrides(overrides) {
   const clean = {};
   for (const key of OVERRIDE_KEYS) {
     if (overrides[key] !== undefined) clean[key] = overrides[key];
+  }
+  return clean;
+}
+
+/**
+ * Style keys a single word may carry. Kept to changes the layout can measure
+ * exactly, so a restyled word still takes the room it needs.
+ */
+export const WORD_OVERRIDE_KEYS = ['color', 'sizeScale', 'fontFamily', 'fontWeight', 'casing'];
+
+/**
+ * Clean a composition's per-word overrides: known keys only, sane size range,
+ * and no empty entries left behind when a word is reset.
+ */
+export function sanitizeWordOverrides(wordOverrides) {
+  if (!wordOverrides || typeof wordOverrides !== 'object') return {};
+  const clean = {};
+  for (const [tokenId, raw] of Object.entries(wordOverrides)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = {};
+    for (const key of WORD_OVERRIDE_KEYS) {
+      const value = raw[key];
+      if (value === undefined || value === null || value === '') continue;
+      if (key === 'sizeScale') {
+        const size = Number(value);
+        if (!Number.isFinite(size)) continue;
+        // A word far outside this range stops being a styled word and starts
+        // being a layout problem for the line around it.
+        entry[key] = Math.max(0.4, Math.min(2.5, size));
+      } else if (key === 'fontWeight') {
+        const weight = Number(value);
+        if (Number.isFinite(weight)) entry[key] = weight;
+      } else {
+        entry[key] = value;
+      }
+    }
+    if (Object.keys(entry).length) clean[tokenId] = entry;
   }
   return clean;
 }

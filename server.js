@@ -37,7 +37,7 @@ import { getTemplate, listTemplates, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID } from '.
 import { listFamilies, buildFontFaceCss, FONT_FILES } from './src/render/fonts.js';
 import { loadCustomFonts, addCustomFont, removeCustomFont } from './src/render/custom-fonts.js';
 import { getStorageReport, runCleanup } from './src/maintenance.js';
-import { applyStyleOverrides, sanitizeOverrides } from './src/render/style-overrides.js';
+import { applyStyleOverrides, sanitizeOverrides, sanitizeWordOverrides } from './src/render/style-overrides.js';
 import { startExport, getJob, cancelJob, getVideoInfo, checkFfmpeg } from './src/render/exporter.js';
 import {
   configureCache as configureMediaCache,
@@ -692,13 +692,15 @@ app.post('/api/projects/:id', checkAuth, async (req, res) => {
       // A composition may carry its own style overrides; those are filtered to
       // known keys too, so a project file cannot accumulate arbitrary data.
       compositions: (Array.isArray(incoming.compositions) ? incoming.compositions : []).map(comp => {
-        if (!comp || !comp.styleOverrides) return comp;
-        const clean = sanitizeOverrides(comp.styleOverrides);
-        if (!Object.keys(clean).length) {
-          const { styleOverrides, ...rest } = comp;
-          return rest;
-        }
-        return { ...comp, styleOverrides: clean };
+        if (!comp) return comp;
+        if (!comp.styleOverrides && !comp.wordOverrides) return comp;
+        const { styleOverrides, wordOverrides, ...rest } = comp;
+        const line = sanitizeOverrides(styleOverrides);
+        const words = sanitizeWordOverrides(wordOverrides);
+        const out = { ...rest };
+        if (Object.keys(line).length) out.styleOverrides = line;
+        if (Object.keys(words).length) out.wordOverrides = words;
+        return out;
       }),
       templateId: resolveTemplateId(incoming.templateId),
       styleOverrides: sanitizeOverrides(incoming.styleOverrides)

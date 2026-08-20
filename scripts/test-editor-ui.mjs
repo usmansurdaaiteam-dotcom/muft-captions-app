@@ -356,6 +356,63 @@ try {
       projectLevel: Object.keys(s.styleOverrides)
     };
   });
+  // 16b. The restyle popover reaches a single word inside a line
+  const perWord = await page.evaluate(async () => {
+    const s = window.__muft.state;
+    const line = document.querySelector('.caption-line');
+    const compId = line.dataset.compId;
+    const comp = s.compositions.find(c => String(c.id) === String(compId));
+
+    line.querySelector('.style-btn').click();
+    await new Promise(r => setTimeout(r, 200));
+    const opened = !document.getElementById('stylePopover').classList.contains('hidden');
+
+    // Targets are "Whole line" followed by one chip per word; pick a word.
+    const targets = [...document.querySelectorAll('#styleTargetRow .style-target')];
+    targets[1].click();
+    await new Promise(r => setTimeout(r, 150));
+
+    document.querySelectorAll('#styleSwatchRow .style-swatch')[1].click();
+    await new Promise(r => setTimeout(r, 150));
+
+    const size = document.getElementById('styleSize');
+    size.value = '1.6';
+    size.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 250));
+
+    const firstToken = comp.token_ids[0];
+    const entry = (comp.wordOverrides || {})[firstToken] || {};
+    const fresh = () => document.querySelector(`.caption-line[data-comp-id="${compId}"]`);
+    const markerShown = !!fresh().querySelector('.style-btn.has-style');
+
+    // Reset must clear it again, marker included.
+    document.getElementById('styleResetTarget').click();
+    await new Promise(r => setTimeout(r, 250));
+
+    return {
+      opened,
+      targetCount: targets.length,
+      wordCount: comp.token_ids.length,
+      entry: Object.keys(entry),
+      colour: entry.color || '',
+      sizeScale: entry.sizeScale,
+      markerShown,
+      markerClearedAfterReset: !fresh().querySelector('.style-btn.has-style'),
+      clearedAfterReset: !(comp.wordOverrides && comp.wordOverrides[firstToken]),
+      lineUntouched: !comp.styleOverrides
+    };
+  });
+  check('restyle popover opens from the transcript line', perWord.opened);
+  check('it offers the whole line plus every word',
+    perWord.targetCount === perWord.wordCount + 1,
+    `${perWord.targetCount} targets for ${perWord.wordCount} words`);
+  check('a colour and size land on that word alone',
+    perWord.entry.includes('color') && perWord.sizeScale === 1.6 && perWord.lineUntouched,
+    `${perWord.colour} at ${perWord.sizeScale}x`);
+  check('the line is marked as carrying its own styling', perWord.markerShown);
+  check('reset clears the word and its marker',
+    perWord.clearedAfterReset && perWord.markerClearedAfterReset);
+
   check('per-line styling records on that line only',
     perLine.styledLine.includes('activeColor') && perLine.otherLine.length === 0,
     JSON.stringify(perLine));

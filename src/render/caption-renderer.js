@@ -19,7 +19,7 @@
  * preview and in a 4K export.
  */
 
-import { applyStyleOverrides } from './style-overrides.js';
+import { applyStyleOverrides, recolorFill } from './style-overrides.js';
 
 // ─── Design space ───────────────────────────────────────────────────────────────
 
@@ -332,7 +332,30 @@ function heroApplies(comp, template) {
   return type === 'emphasis' || type === 'spotlight';
 }
 
-/** Text for a token after casing, plus its timing. */
+/**
+ * Style keys a single word may override, on top of whatever its line resolves
+ * to. Deliberately small: everything here is either a pure paint change or
+ * something the layout can account for exactly. Anything that would need its own
+ * layout pass belongs at line level instead.
+ */
+const WORD_OVERRIDE_KEYS = ['color', 'sizeScale', 'fontFamily', 'fontWeight', 'casing'];
+
+function wordOverrideFor(comp, tokenId) {
+  const all = comp && comp.wordOverrides;
+  if (!all) return null;
+  const raw = all[tokenId] || all[String(tokenId)];
+  if (!raw || typeof raw !== 'object') return null;
+  let found = null;
+  for (const key of WORD_OVERRIDE_KEYS) {
+    const value = raw[key];
+    if (value === undefined || value === null || value === '') continue;
+    found = found || {};
+    found[key] = value;
+  }
+  return found;
+}
+
+/** Text for a token after casing, plus its timing and any per-word style. */
 function displayWords(comp, tokenMap, template) {
   const casing = (template.font && template.font.casing) || 'none';
   // The hero word can be cased independently of the words around it, which is
@@ -348,12 +371,18 @@ function displayWords(comp, tokenMap, template) {
     const raw = String(token.text || '').trim();
     if (!raw) continue;
     const isHero = id === comp.hero_token_id;
+    const override = wordOverrideFor(comp, id);
+    const lineCasing = isHero && heroStyled ? heroCasing : casing;
     words.push({
       id,
-      text: applyCasing(raw, isHero && heroStyled ? heroCasing : casing),
+      text: applyCasing(raw, (override && override.casing) || lineCasing),
       startMs: token.start_ms,
       endMs: token.end_ms,
-      isHero
+      isHero,
+      override,
+      family: (override && override.fontFamily) || template.font.family,
+      weight: (override && override.fontWeight) || template.font.weight,
+      sizeScale: (override && Number(override.sizeScale)) || 1
     });
   }
   return words;
@@ -406,9 +435,18 @@ function wrapWords(ctx, words, template, fontSize, maxWidth, maxLines, scale) {
     ctx.letterSpacing = `${letterSpacing * sizeRatio}px`;
 
     const measured = words.map(word => {
-      ctx.font = fontFor(word.text, family, weight, size);
+      // A word carrying its own font or size is measured at that font and size,
+      // so a resized word takes the room it actually needs instead of
+      // overlapping the words beside it.
+      const wordSize = size * (word.sizeScale || 1);
+      ctx.font = fontFor(word.text, word.family || family, word.weight || weight, wordSize);
       const width = ctx.measureText(word.text).width;
-      return { ...word, width, slack: wordSlack(template, width, scale * sizeRatio), size };
+      return {
+        ...word,
+        width,
+        slack: wordSlack(template, width, scale * sizeRatio),
+        size: wordSize
+      };
     });
 
     ctx.font = fontFor(' ', family, weight, size);
@@ -467,7 +505,10 @@ function wrapWords(ctx, words, template, fontSize, maxWidth, maxLines, scale) {
  * spans and re-measuring text thousands of times is the main cost.
  */
 function layoutComposition(ctx, comp, tokenMap, template, width, height) {
-  const key = `${comp.id}:${layoutSignature(template)}:${Math.round(width)}x${Math.round(height)}:${(comp.token_ids || []).join(',')}:${comp.hero_token_id}:${comp.comp_type}`;
+  // Per-word overrides can change a word's font, size and casing, all of which
+  // are measured, so they belong in the cache key.
+  const wordSignature = comp.wordOverrides ? JSON.stringify(comp.wordOverrides) : '';
+  const key = `${comp.id}:${layoutSignature(template)}:${Math.round(width)}x${Math.round(height)}:${(comp.token_ids || []).join(',')}:${comp.hero_token_id}:${comp.comp_type}:${wordSignature}`;
   const cached = cacheGet(key);
   if (cached) return cached;
 
@@ -524,7 +565,11 @@ function placeKaraokeLayout(ctx, words, template, baseSize, scale, maxWidth, max
     ctx, words, template, baseSize * spotlightScale, maxWidth, maxLines, scale
   );
 
-  const step = size * lineHeight;
+  // Line spacing follows the tallest word on the line rather than the line's
+  // nominal size, so a word the user has enlarged does not collide with the line
+  // above it.
+  const lineSize = line => Math.max(size, ...line.words.map(w => w.size || size));
+  const step = Math.max(...lines.map(lineSize), size) * lineHeight;
   const blockHeight = step * lines.length;
   let y = centerY - blockHeight / 2 + step / 2;
 
@@ -540,7 +585,7 @@ function placeKaraokeLayout(ctx, words, template, baseSize, scale, maxWidth, max
       out.push({ ...word, x: cursor, y, lineIndex: lineBoxes.length });
       cursor += word.width;
     }
-    lineBoxes.push({ x0: lineStart, x1: cursor, y, size });
+    lineBoxes.push({ x0: lineStart, x1: cursor, y, size: lineSize(line) });
     y += step;
   }
 }
@@ -581,13 +626,17 @@ function placeHeroLayout(ctx, words, template, baseSize, scale, maxWidth, center
   // long word still has to stay inside the frame, so shrink the whole stack
   // proportionally if it would not fit. Scaling the support text by the same
   // factor keeps the size relationship between them intact.
-  ctx.font = fontFor(hero.text, family, weight, heroSize);
+  const heroFamily = hero.family || family;
+  const heroWeight = hero.weight || weight;
+  heroSize *= hero.sizeScale || 1;
+
+  ctx.font = fontFor(hero.text, heroFamily, heroWeight, heroSize);
   let heroWidth = ctx.measureText(hero.text).width;
   if (heroWidth > maxWidth) {
     const shrink = maxWidth / heroWidth;
     heroSize *= shrink;
     supportSize *= shrink;
-    ctx.font = fontFor(hero.text, family, weight, heroSize);
+    ctx.font = fontFor(hero.text, heroFamily, heroWeight, heroSize);
     heroWidth = ctx.measureText(hero.text).width;
   }
 
@@ -595,8 +644,9 @@ function placeHeroLayout(ctx, words, template, baseSize, scale, maxWidth, center
   const spaceWidth = ctx.measureText(' ').width || supportSize * 0.28;
 
   const measure = (list) => list.map(word => {
-    ctx.font = fontFor(word.text, family, weight, supportSize);
-    return { ...word, width: ctx.measureText(word.text).width, size: supportSize };
+    const size = supportSize * (word.sizeScale || 1);
+    ctx.font = fontFor(word.text, word.family || family, word.weight || weight, size);
+    return { ...word, width: ctx.measureText(word.text).width, size };
   });
 
   const beforeWords = measure(before);
@@ -609,7 +659,11 @@ function placeHeroLayout(ctx, words, template, baseSize, scale, maxWidth, center
   // thing on its line) and a full em for the support lines.
   const gap = heroSize * gapEm;
   const heroBand = heroSize * 0.74;
-  const supportBand = supportSize * 0.8;
+  const supportBand = Math.max(
+    supportSize,
+    ...beforeWords.map(w => w.size),
+    ...afterWords.map(w => w.size)
+  ) * 0.8;
 
   const stackHeight = heroBand
     + (beforeWords.length ? supportBand + gap : 0)
@@ -781,7 +835,9 @@ function drawLineBackgrounds(ctx, laid, template, scale) {
 function drawWord(ctx, word, style, template, scale, anim) {
   const text = word.text;
   const size = word.size * (style.sizeScale || 1);
-  const font = fontFor(text, template.font.family, template.font.weight, size);
+  // The word's own font, which layout already measured it at. Falling back to
+  // the template's would draw at a different width than was reserved.
+  const font = fontFor(text, word.family || template.font.family, word.weight || template.font.weight, size);
 
   ctx.save();
   ctx.font = font;
@@ -997,6 +1053,13 @@ export function renderCaptionFrame(ctx, timeMs, compositions, tokenMap, baseTemp
       style = lerpStyle(activeStyle, spokenStyle, activeBlend(template, word, timeMs) === 0 ? 1 : 1 - activeBlend(template, word, timeMs));
     } else {
       style = baseStyle;
+    }
+
+    // A word recoloured on its own takes its glow with it — a green halo around
+    // a word the user just made red reads as a mistake, not a choice.
+    if (word.override && word.override.color) {
+      style = { ...style, fill: recolorFill(style.fill, word.override.color) };
+      if (style.glow) style.glow = { ...style.glow, color: word.override.color };
     }
 
     // With reveal 'all' the whole phrase is on screen for the composition, so

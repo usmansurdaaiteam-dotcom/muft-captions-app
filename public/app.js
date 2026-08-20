@@ -382,6 +382,252 @@ document.querySelectorAll('.scope-btn').forEach(btn => {
   btn.addEventListener('click', () => setStyleScope(btn.dataset.scope));
 });
 
+// ─── Restyle popover: one line, or one word inside it ──────────────────────────
+
+/**
+ * The right-hand inspector styles the whole project. This popover is the other
+ * end of that: it hangs off a single line in the transcript and can narrow to a
+ * single word inside it, which is the level people actually want when one word
+ * should be a different colour or size from the rest of its line.
+ *
+ * Line-level tweaks live in comp.styleOverrides and go through the same resolver
+ * as the project's. Word-level tweaks live in comp.wordOverrides, keyed by token,
+ * and are applied by the renderer at layout time so a resized word takes the
+ * room it needs instead of overlapping its neighbours.
+ */
+const SWATCHES = [
+  '#FFFFFF', '#9FD83A', '#00FFB2', '#FFE600', '#FF9900',
+  '#FF3B5C', '#FF3DFF', '#00E5FF', '#7C5CFF', '#111111'
+];
+
+let popoverTarget = null; // { compId, tokenId | null }
+
+function stylePopoverComp() {
+  return popoverTarget
+    ? state.compositions.find(c => c.id === popoverTarget.compId) || null
+    : null;
+}
+
+/** The override bag the popover is currently writing into, created on demand. */
+function popoverBag({ create = false } = {}) {
+  const comp = stylePopoverComp();
+  if (!comp) return null;
+  if (!popoverTarget.tokenId) {
+    if (!comp.styleOverrides && create) comp.styleOverrides = {};
+    return comp.styleOverrides || null;
+  }
+  if (!comp.wordOverrides && create) comp.wordOverrides = {};
+  if (!comp.wordOverrides) return null;
+  if (!comp.wordOverrides[popoverTarget.tokenId] && create) {
+    comp.wordOverrides[popoverTarget.tokenId] = {};
+  }
+  return comp.wordOverrides[popoverTarget.tokenId] || null;
+}
+
+const hasEntries = bag => !!bag && Object.keys(bag).length > 0;
+
+/**
+ * Line and word overrides use different key names for the same idea, because a
+ * line's overrides go through the shared template resolver while a word's are
+ * applied to that word alone. This maps the popover's controls onto whichever is
+ * in play.
+ */
+function popoverKey(name) {
+  const forWord = { color: 'color', size: 'sizeScale', font: 'fontFamily', casing: 'casing' };
+  const forLine = { color: 'activeColor', size: 'heroSizeScale', font: 'fontFamily', casing: 'casing' };
+  return (popoverTarget && popoverTarget.tokenId ? forWord : forLine)[name];
+}
+
+function setPopoverValue(name, value) {
+  const key = popoverKey(name);
+  if (!key) return;
+  const bag = popoverBag({ create: true });
+  if (!bag) return;
+
+  pushUndoState();
+  if (value === null || value === undefined || value === '') delete bag[key];
+  else bag[key] = value;
+
+  // Leave no empty objects behind, so "does this line have styling?" stays a
+  // simple check for both the marker in the transcript and the saved file.
+  const comp = stylePopoverComp();
+  if (comp) {
+    if (comp.styleOverrides && !hasEntries(comp.styleOverrides)) delete comp.styleOverrides;
+    if (comp.wordOverrides) {
+      for (const [id, entry] of Object.entries(comp.wordOverrides)) {
+        if (!hasEntries(entry)) delete comp.wordOverrides[id];
+      }
+      if (!hasEntries(comp.wordOverrides)) delete comp.wordOverrides;
+    }
+  }
+
+  commitPopoverChange();
+}
+
+function openStylePopover(compId, anchor) {
+  const comp = state.compositions.find(c => c.id === compId);
+  if (!comp) return;
+  popoverTarget = { compId, tokenId: null };
+
+  // Put the playhead on this line, so the preview shows what is being restyled
+  // rather than whichever line the video happened to be sitting on.
+  if (videoPlayer && Number.isFinite(comp.start_ms)) {
+    videoPlayer.currentTime = (comp.start_ms + 40) / 1000;
+    state.activeCompositionId = comp.id;
+  }
+
+  const popover = $('stylePopover');
+  popover.classList.remove('hidden');
+
+  // Anchor beside the button, then pull back inside the viewport.
+  const rect = anchor.getBoundingClientRect();
+  const box = popover.getBoundingClientRect();
+  const left = Math.min(rect.left - box.width - 10, window.innerWidth - box.width - 10);
+  popover.style.left = `${Math.max(10, left)}px`;
+  popover.style.top = `${Math.max(10, Math.min(rect.top - 8, window.innerHeight - box.height - 10))}px`;
+
+  syncStylePopover();
+}
+
+function closeStylePopover() {
+  popoverTarget = null;
+  const popover = $('stylePopover');
+  if (popover) popover.classList.add('hidden');
+}
+
+/** Redraw the popover from whatever the current target actually carries. */
+function syncStylePopover() {
+  const comp = stylePopoverComp();
+  if (!comp) return closeStylePopover();
+
+  const tokenMap = new Map(state.tokens.map(t => [t.id, t]));
+  const index = state.compositions.indexOf(comp) + 1;
+  $('stylePopoverTitle').textContent = `Line ${index}`;
+
+  // Target chips: the whole line, then each word in it.
+  const row = $('styleTargetRow');
+  row.innerHTML = '';
+  const chip = (label, tokenId, styled) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'style-target'
+      + (popoverTarget.tokenId === tokenId ? ' active' : '')
+      + (styled ? ' styled' : '');
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      popoverTarget.tokenId = tokenId;
+      syncStylePopover();
+    });
+    row.appendChild(btn);
+  };
+  chip('Whole line', null, hasEntries(comp.styleOverrides));
+  for (const tokenId of comp.token_ids || []) {
+    const token = tokenMap.get(tokenId);
+    if (!token) continue;
+    chip(token.text.trim(), tokenId, hasEntries(comp.wordOverrides && comp.wordOverrides[tokenId]));
+  }
+
+  const bag = popoverBag() || {};
+  const colour = bag[popoverKey('color')] || '';
+  const size = bag[popoverKey('size')];
+  const font = bag[popoverKey('font')] || '';
+  const casing = bag[popoverKey('casing')] || '';
+
+  const swatches = $('styleSwatchRow');
+  swatches.innerHTML = '';
+  for (const value of SWATCHES) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'style-swatch' + (colour.toUpperCase() === value ? ' active' : '');
+    btn.style.background = value;
+    btn.title = value;
+    btn.addEventListener('click', () => setPopoverValue('color', value));
+    swatches.appendChild(btn);
+  }
+
+  $('styleColor').value = /^#[0-9a-f]{6}$/i.test(colour) ? colour : '#ffffff';
+  $('styleSize').value = size === undefined ? 1 : size;
+  $('styleSizeValue').textContent = `${Math.round((size === undefined ? 1 : size) * 100)}%`;
+  $('styleFont').value = font;
+  $('styleCasing').value = casing;
+
+  // Size means different things at the two levels, and saying so beats a user
+  // wondering why the slider moved the hero and not the line.
+  const label = $('styleSize').previousElementSibling;
+  if (label) {
+    label.firstChild.textContent = popoverTarget.tokenId ? 'Size ' : 'Highlighted word size ';
+  }
+}
+
+$('stylePopoverClose').addEventListener('click', closeStylePopover);
+$('styleColor').addEventListener('input', e => setPopoverValue('color', e.target.value));
+$('styleColorClear').addEventListener('click', () => setPopoverValue('color', null));
+$('styleSize').addEventListener('input', e => {
+  $('styleSizeValue').textContent = `${Math.round(Number(e.target.value) * 100)}%`;
+});
+$('styleSize').addEventListener('change', e => setPopoverValue('size', Number(e.target.value)));
+$('styleFont').addEventListener('change', e => setPopoverValue('font', e.target.value || null));
+$('styleCasing').addEventListener('change', e => setPopoverValue('casing', e.target.value || null));
+
+function commitPopoverChange() {
+  if (window.CaptionRenderer) window.CaptionRenderer.clearLayoutCache();
+  saveProjectState();
+  renderCaptions();
+  // Only the styling marker on this one line can have changed, so update it in
+  // place. Rebuilding the whole transcript on every swatch click would throw
+  // away scroll position and any word being edited.
+  updateLineStyleMarker();
+  syncStylePopover();
+}
+
+function updateLineStyleMarker() {
+  const comp = stylePopoverComp();
+  if (!comp) return;
+  const line = document.querySelector(`.caption-line[data-comp-id="${comp.id}"]`);
+  const button = line && line.querySelector('.style-btn');
+  if (!button) return;
+  const styled = hasEntries(comp.styleOverrides) || hasEntries(comp.wordOverrides);
+  button.classList.toggle('has-style', styled);
+  button.title = styled
+    ? 'This line has its own colour, size or font — click to edit'
+    : 'Colour, size or font for this line or one of its words';
+}
+
+$('styleResetTarget').addEventListener('click', () => {
+  const comp = stylePopoverComp();
+  if (!comp) return;
+  pushUndoState();
+  if (popoverTarget.tokenId) {
+    if (comp.wordOverrides) {
+      delete comp.wordOverrides[popoverTarget.tokenId];
+      if (!hasEntries(comp.wordOverrides)) delete comp.wordOverrides;
+    }
+  } else {
+    delete comp.styleOverrides;
+  }
+  commitPopoverChange();
+});
+
+$('styleResetLine').addEventListener('click', () => {
+  const comp = stylePopoverComp();
+  if (!comp) return;
+  pushUndoState();
+  delete comp.styleOverrides;
+  delete comp.wordOverrides;
+  commitPopoverChange();
+});
+
+document.addEventListener('mousedown', e => {
+  const popover = $('stylePopover');
+  if (!popover || popover.classList.contains('hidden')) return;
+  if (popover.contains(e.target) || e.target.closest('.style-btn')) return;
+  closeStylePopover();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeStylePopover();
+});
+
 /** First editable colour of a fill, whether solid, gradient or depth. */
 function fillColorOf(style, fallback) {
   const fill = style && style.fill;
@@ -482,12 +728,22 @@ function populateFontOptions() {
     .map(f => `<option value="${f.family}">${f.family}</option>`)
     .join('');
 
-  select.innerHTML = custom.length
+  const groups = custom.length
     ? `<optgroup label="Installed">${options(builtIn)}</optgroup>` +
       `<optgroup label="Your fonts">${options(custom)}</optgroup>`
     : options(builtIn);
 
+  select.innerHTML = groups;
   if (state.template) select.value = state.template.font.family;
+
+  // The restyle popover offers the same fonts, plus the option of not changing
+  // the font at all.
+  const popoverSelect = $('styleFont');
+  if (popoverSelect) {
+    const current = popoverSelect.value;
+    popoverSelect.innerHTML = `<option value="">Same as template</option>${groups}`;
+    popoverSelect.value = current;
+  }
 }
 
 /**
@@ -1601,6 +1857,22 @@ function renderCaptionList() {
       cycleCompType(comp.id);
     });
     layoutDiv.appendChild(layoutBtn);
+
+    // Restyle this line, or one word inside it.
+    const hasOwnStyle = (comp.styleOverrides && Object.keys(comp.styleOverrides).length)
+      || (comp.wordOverrides && Object.keys(comp.wordOverrides).length);
+    const styleBtn = document.createElement('button');
+    styleBtn.className = 'layout-btn style-btn' + (hasOwnStyle ? ' has-style' : '');
+    styleBtn.textContent = '\u25D1';
+    styleBtn.title = hasOwnStyle
+      ? 'This line has its own colour, size or font — click to edit'
+      : 'Colour, size or font for this line or one of its words';
+    styleBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openStylePopover(comp.id, styleBtn);
+    });
+    layoutDiv.appendChild(styleBtn);
+
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'delete-btn';
     deleteBtn.textContent = '\u00D7';

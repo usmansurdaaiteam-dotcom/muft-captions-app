@@ -1,15 +1,23 @@
 /**
  * check-per-line-styles.mjs
  *
- * Verifies that a single composition can carry its own style overrides that
- * layer on top of the project's, and that they only affect that composition.
+ * Verifies the two narrower levels of styling below the project:
+ *
+ *   - a single line can carry overrides that layer on top of the project's, and
+ *     they affect only that line
+ *   - a single word inside a line can carry its own colour, size, font and
+ *     casing, without disturbing the words beside it
+ *
+ * The per-word size case is the one worth guarding. A resized word has to be
+ * measured at its new size during layout, not just drawn larger; if it is only
+ * drawn larger it overlaps whatever comes next on the line.
  *
  * Usage: node scripts/check-per-line-styles.mjs
  */
 
 import { createCanvas } from '@napi-rs/canvas';
 import { registerFonts } from '../src/render/fonts-node.js';
-import { renderCaptionFrame, clearLayoutCache } from '../src/render/caption-renderer.js';
+import { renderCaptionFrame, clearLayoutCache, getCaptionBounds } from '../src/render/caption-renderer.js';
 import { getTemplate } from '../src/render/templates.js';
 
 registerFonts();
@@ -69,6 +77,59 @@ const checks = [
   ['the styled line is taller', styled.height > plain.height]
 ];
 
+// ─── One word inside a line ─────────────────────────────────────────────────────
+
+/**
+ * Per-word geometry, read from the renderer's own layout rather than from
+ * pixels, so overlap between neighbouring words can be measured exactly.
+ */
+function wordBoxes(comp) {
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+  clearLayoutCache();
+  const template = getTemplate('muft-default');
+  renderCaptionFrame(ctx, comp.end_ms - 10, [comp], tokenMap, template, W, H);
+
+  // getCaptionBounds walks the same layout the frame was drawn from.
+  const bounds = getCaptionBounds(ctx, comp.end_ms - 10, [comp], tokenMap, template, W, H);
+  const { data } = ctx.getImageData(0, 0, W, H);
+  let blue = 0;
+  let minY = H, maxY = -1;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] <= 140) continue;
+    const y = Math.floor((i / 4) / W);
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (data[i + 2] > 170 && data[i] < 110 && data[i + 1] < 150) blue++;
+  }
+  return { bounds, blue, height: maxY - minY };
+}
+
+const wordLine = {
+  id: 3, token_ids: [1, 2, 3], hero_token_id: 2,
+  comp_type: 'plain', start_ms: 0, end_ms: 1200
+};
+const wordStyled = {
+  ...wordLine,
+  wordOverrides: { 3: { color: '#2255FF', sizeScale: 1.8, casing: 'upper' } }
+};
+
+const before = wordBoxes(wordLine);
+const after = wordBoxes(wordStyled);
+
+console.log('\nline with no per-word styling:', JSON.stringify({ blue: before.blue, height: before.height }));
+console.log('line with one word restyled  :', JSON.stringify({ blue: after.blue, height: after.height }));
+
+checks.push(
+  ['a word takes the colour set on it alone', after.blue > 200 && before.blue < 50],
+  // Enlarging one word makes the line taller. If the enlarged word were drawn
+  // big but measured small, the block height would barely move while the word
+  // silently overlapped its neighbour.
+  ['enlarging one word makes the line taller', after.height > before.height * 1.2],
+  ['the line still fits inside the frame', after.bounds
+    && after.bounds.x >= 0 && after.bounds.x + after.bounds.width <= W]
+);
+
 let failed = 0;
 for (const [label, ok] of checks) {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`);
@@ -79,4 +140,4 @@ if (failed) {
   console.log(`\n${failed} check(s) failed.`);
   process.exit(1);
 }
-console.log('\nPer-line style overrides work.');
+console.log('\nPer-line and per-word style overrides work.');

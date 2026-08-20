@@ -583,6 +583,44 @@
     <button class="context-item danger" id="ctxDeleteBtn">Delete Word</button>
   </div>
 
+  <!-- Restyle one line, or one word inside it -->
+  <div id="stylePopover" class="style-popover hidden" role="dialog" aria-label="Restyle this line">
+    <div class="style-popover-head">
+      <span id="stylePopoverTitle">Line 1</span>
+      <button type="button" id="stylePopoverClose" title="Close">&times;</button>
+    </div>
+
+    <p class="style-popover-label">Apply to</p>
+    <div class="style-target-row" id="styleTargetRow"></div>
+
+    <p class="style-popover-label">Colour</p>
+    <div class="style-swatch-row" id="styleSwatchRow"></div>
+    <div class="control-row">
+      <input type="color" id="styleColor" aria-label="Custom colour" />
+      <button type="button" class="ghost-btn" id="styleColorClear">Default</button>
+    </div>
+
+    <p class="style-popover-label">Size <span id="styleSizeValue">100%</span></p>
+    <input type="range" id="styleSize" min="0.4" max="2.5" step="0.05" value="1" />
+
+    <p class="style-popover-label">Font</p>
+    <select id="styleFont"><option value="">Same as template</option></select>
+
+    <p class="style-popover-label">Casing</p>
+    <select id="styleCasing">
+      <option value="">Same as template</option>
+      <option value="none">As spoken</option>
+      <option value="upper">UPPERCASE</option>
+      <option value="lower">lowercase</option>
+      <option value="title">Title Case</option>
+    </select>
+
+    <div class="style-popover-actions">
+      <button type="button" class="ghost-btn" id="styleResetTarget">Reset this</button>
+      <button type="button" class="ghost-btn danger" id="styleResetLine">Reset whole line</button>
+    </div>
+  </div>
+
   <!-- Keyboard shortcuts reference -->
   <div id="shortcutsModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
     <div class="export-modal">
@@ -594,6 +632,7 @@
         <dt><kbd>Ctrl</kbd>+<kbd>F</kbd></dt><dd>Find and replace</dd>
         <dt><kbd>Click</kbd> a word</dt><dd>Make it the highlighted word</dd>
         <dt><kbd>Right-click</kbd> a word</dt><dd>Split, combine, delete or spotlight</dd>
+        <dt><kbd>&#9681;</kbd> on a line</dt><dd>Colour, size or font for that line or one word in it</dd>
         <dt><kbd>Drag</kbd> on the video</dt><dd>Move the captions</dd>
         <dt><kbd>Drag</kbd> a corner handle</dt><dd>Resize the captions</dd>
         <dt><kbd>Drag</kbd> a timeline block</dt><dd>Retime a word</dd>
