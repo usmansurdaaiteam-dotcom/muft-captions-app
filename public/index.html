@@ -549,14 +549,25 @@
   <!-- Exporting Progress Modal -->
   <div class="modal-overlay hidden" id="exportModal">
     <div class="export-modal">
-      <h3 class="modal-title">Exporting Video</h3>
-      <p class="modal-subtitle" id="exportStatus">Initializing HD export render...</p>
-      <div class="progress-bar">
+      <h3 class="modal-title" id="exportTitle">Exporting video</h3>
+      <p class="modal-subtitle" id="exportStatus">Starting...</p>
+      <div class="progress-bar" id="exportProgressWrap">
         <div class="progress-fill" id="exportProgressFill" style="width: 0%;"></div>
       </div>
+
+      <!-- Shown when the render finishes. A link the user can click matters:
+           a browser may refuse a download it did not start from a click, and
+           without something visible there is nothing to fall back to. -->
+      <a class="export-main-btn hidden" id="exportDownloadLink" download>
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Save the video
+      </a>
+      <p class="export-error hidden" id="exportError"></p>
+
       <div class="modal-meta">
         <span id="exportPercent">0%</span>
         <button class="cancel-btn" id="cancelExportBtn">Cancel</button>
+        <button class="cancel-btn hidden" id="exportCloseBtn">Close</button>
       </div>
     </div>
   </div>

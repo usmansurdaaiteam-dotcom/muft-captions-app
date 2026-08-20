@@ -17,6 +17,7 @@ import { verifySonioxAccess, getSupportedLanguages, DEFAULT_STT_MODEL } from '..
 import { verifyGeminiAccess, GOOGLE_API_BASE, DEFAULT_GEMINI_MODEL } from '../src/gemini.js';
 import { checkGeminiWebAccess, sapisidFromCookies } from '../src/gemini-web.js';
 import { LANGUAGES, validateLanguages } from '../src/languages.js';
+import { checkFfmpeg } from '../src/render/exporter.js';
 
 const SONIOX_API_KEY = process.env.SONIOX_API_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
@@ -38,8 +39,28 @@ function line(state, label, detail = '') {
   console.log(`  ${marks[state]}  ${label}${detail ? ` — ${detail}` : ''}`);
 }
 
-console.log('Muft Captions — credential check');
+console.log('Muft Captions — setup check');
 console.log(envFileLoaded ? `Loaded ${ENV_PATH}` : `No .env found at ${ENV_PATH} (using the process environment)`);
+
+// ─── FFmpeg ────────────────────────────────────────────────────────────────────
+// Checked first because it is the most common thing to be missing and the one
+// whose absence is least obvious: exports simply fail.
+
+heading('Video tools (FFmpeg)');
+const ffmpeg = await checkFfmpeg({ force: true });
+for (const binary of ['ffmpeg', 'ffprobe']) {
+  const result = ffmpeg[binary];
+  line(result.ok ? 'ok' : 'bad', binary, result.ok ? result.version : result.reason);
+}
+if (!ffmpeg.ok) {
+  problems.push('Exports cannot run without FFmpeg.');
+  advice.push(
+    'Install FFmpeg and make sure "ffmpeg -version" works in a NEW terminal:\n' +
+    '      Windows:  winget install Gyan.FFmpeg\n' +
+    '      macOS:    brew install ffmpeg\n' +
+    '      Linux:    sudo apt install ffmpeg'
+  );
+}
 
 // ─── Transcription ─────────────────────────────────────────────────────────────
 
@@ -119,6 +140,10 @@ if (!GEMINI_COOKIES) {
 heading('Summary');
 const compositionWorks = (GEMINI_API_KEY && (await verifyGeminiAccess(GEMINI_API_KEY, GEMINI_API_MODEL, GEMINI_API_BASE)).ok)
   || (GEMINI_COOKIES && (await checkGeminiWebAccess({ cookies: GEMINI_COOKIES, sapisid: GEMINI_SAPISID })).ok);
+
+if (!ffmpeg.ok) {
+  console.log('  Exports will FAIL: FFmpeg is not available. See below.');
+}
 
 if (SONIOX_API_KEY && compositionWorks) {
   console.log('  Captions will generate properly: transcription and composition both work.');

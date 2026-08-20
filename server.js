@@ -38,7 +38,7 @@ import { listFamilies, buildFontFaceCss, FONT_FILES } from './src/render/fonts.j
 import { loadCustomFonts, addCustomFont, removeCustomFont } from './src/render/custom-fonts.js';
 import { getStorageReport, runCleanup } from './src/maintenance.js';
 import { applyStyleOverrides, sanitizeOverrides } from './src/render/style-overrides.js';
-import { startExport, getJob, cancelJob, getVideoInfo } from './src/render/exporter.js';
+import { startExport, getJob, cancelJob, getVideoInfo, checkFfmpeg } from './src/render/exporter.js';
 import {
   configureCache as configureMediaCache,
   getWaveform,
@@ -262,7 +262,12 @@ function cookieValue(req, name) {
 function isAuthed(req) {
   if (!REQUIRE_PASSWORD) return true;
   return req.headers['x-access-token'] === SESSION_TOKEN
-    || cookieValue(req, SESSION_COOKIE) === SESSION_TOKEN;
+    || cookieValue(req, SESSION_COOKIE) === SESSION_TOKEN
+    // A file download is a plain navigation, which cannot carry a custom header.
+    // The cookie normally covers it, but a browser that declines to send the
+    // cookie on a programmatic download would fail with nothing to show the
+    // user, so the same token is also accepted in the query string.
+    || req.query?.token === SESSION_TOKEN;
 }
 
 function checkAuth(req, res, next) {
@@ -882,6 +887,14 @@ app.post('/api/export', checkAuth, async (req, res) => {
       return res.status(404).json({ error: 'Source video not found. Please re-upload.' });
     }
 
+    // Fail before queueing rather than after rendering has apparently started:
+    // without FFmpeg the job dies with "spawn ffprobe ENOENT", which tells the
+    // user nothing about what to install.
+    const ffmpeg = await checkFfmpeg();
+    if (!ffmpeg.ok) {
+      return res.status(503).json({ error: ffmpeg.message });
+    }
+
     const template = applyStyleOverrides(getTemplate(templateId), sanitizeOverrides(styleOverrides));
     const outputPath = path.join(UPLOADS_DIR, `export-${Date.now()}.mp4`);
     const safeTitle = String(title || 'captions').replace(/[^\w\-. ]+/g, '').trim() || 'captions';
@@ -949,6 +962,15 @@ app.listen(PORT, () => {
  * rather than being discovered at the first upload.
  */
 async function reportCaptionAiStatus() {
+  // FFmpeg first: it is the most common thing to be missing on a fresh machine,
+  // and without it exports fail with an error that says nothing useful.
+  const ffmpeg = await checkFfmpeg();
+  if (ffmpeg.ok) {
+    console.log('[ffmpeg] Ready.');
+  } else {
+    console.warn(`[ffmpeg] NOT AVAILABLE — exports will fail.\n         ${ffmpeg.message}`);
+  }
+
   // Transcription: nothing works without it.
   if (!SONIOX_API_KEY) {
     console.warn('[soniox] No SONIOX_API_KEY set — transcription will fail. See .env.example.');

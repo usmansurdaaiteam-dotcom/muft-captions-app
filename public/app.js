@@ -2823,6 +2823,57 @@ function setExportProgress(percent, label) {
   if (label) exportStatus.textContent = label;
 }
 
+/** Put the export dialog back into its in-progress state. */
+function resetExportModal() {
+  $('exportTitle').textContent = 'Exporting video';
+  $('exportProgressWrap').classList.remove('hidden');
+  $('exportDownloadLink').classList.add('hidden');
+  $('exportError').classList.add('hidden');
+  $('exportError').textContent = '';
+  $('cancelExportBtn').classList.remove('hidden');
+  $('exportCloseBtn').classList.add('hidden');
+  $('exportPercent').classList.remove('hidden');
+  setExportProgress(0, 'Starting...');
+}
+
+/**
+ * Show a failure and leave it on screen.
+ *
+ * Previously the message was shown for five seconds and the dialog then closed
+ * itself, so a failed export looked exactly like nothing happening — the user
+ * saw a progress bar, then the editor again, with no explanation.
+ */
+function showExportError(message) {
+  $('exportTitle').textContent = 'Export failed';
+  $('exportProgressWrap').classList.add('hidden');
+  $('exportPercent').classList.add('hidden');
+  $('exportDownloadLink').classList.add('hidden');
+  exportStatus.textContent = 'The video was not created.';
+  const error = $('exportError');
+  error.textContent = message;
+  error.classList.remove('hidden');
+  $('cancelExportBtn').classList.add('hidden');
+  $('exportCloseBtn').classList.remove('hidden');
+}
+
+/** Offer the finished file, and try to start the download automatically. */
+function showExportReady(downloadUrl, filename) {
+  $('exportTitle').textContent = 'Export complete';
+  $('exportProgressWrap').classList.add('hidden');
+  $('exportPercent').classList.add('hidden');
+  exportStatus.textContent = 'If the download did not start on its own, use the button below.';
+
+  const link = $('exportDownloadLink');
+  link.href = downloadUrl;
+  link.setAttribute('download', filename || '');
+  link.classList.remove('hidden');
+
+  $('cancelExportBtn').classList.add('hidden');
+  $('exportCloseBtn').classList.remove('hidden');
+
+  triggerDownload(downloadUrl, filename);
+}
+
 /**
  * Render on the server as a tracked job.
  *
@@ -2839,7 +2890,7 @@ async function exportMP4() {
   state.exporting = true;
   state.exportJobId = null;
   exportModal.classList.remove('hidden');
-  setExportProgress(0, 'Queueing export...');
+  resetExportModal();
 
   try {
     const response = await fetch('/api/export', {
@@ -2856,7 +2907,7 @@ async function exportMP4() {
     });
 
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `Could not start export (HTTP ${response.status})`);
+    if (!response.ok) throw new Error(data.error || `Could not start the export (HTTP ${response.status})`);
     state.exportJobId = data.jobId;
 
     const job = await pollExportJob(data.jobId);
@@ -2867,20 +2918,32 @@ async function exportMP4() {
       return;
     }
     if (job.status !== 'completed') {
-      throw new Error(job.error || 'Rendering failed.');
+      throw new Error(job.error || 'Rendering failed for an unknown reason.');
     }
 
-    setExportProgress(100, STATUS_LABELS.completed);
-    triggerDownload(job.downloadUrl);
-    setTimeout(() => exportModal.classList.add('hidden'), 900);
+    const baseName = state.filename.replace(/\.[^/.]+$/, '') || 'captions';
+    showExportReady(withAuthToken(job.downloadUrl), `${baseName}-captioned.mp4`);
   } catch (error) {
     console.error('Export error:', error);
-    exportStatus.textContent = 'Export failed: ' + error.message;
-    setTimeout(() => exportModal.classList.add('hidden'), 5000);
+    showExportError(error.message);
   } finally {
     state.exporting = false;
     state.exportJobId = null;
   }
+}
+
+/**
+ * Add the session token to a URL.
+ *
+ * A download is a plain navigation, so the interceptor that attaches
+ * x-access-token to fetch calls does not apply. The session cookie normally
+ * covers it, but a browser that declines to send the cookie on a download it did
+ * not initiate would get a 401 with no visible explanation.
+ */
+function withAuthToken(url) {
+  const token = localStorage.getItem('muft_auth_token');
+  if (!url || !token) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
 }
 
 async function pollExportJob(jobId) {
@@ -2899,10 +2962,11 @@ async function pollExportJob(jobId) {
   }
 }
 
-function triggerDownload(url) {
+function triggerDownload(url, filename) {
   const a = document.createElement('a');
   a.href = url;
-  a.download = '';
+  if (filename) a.download = filename;
+  else a.download = '';
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -2918,6 +2982,16 @@ $('cancelExportBtn').addEventListener('click', async () => {
   exportStatus.textContent = 'Cancelling...';
   await fetch(`/api/export/${state.exportJobId}/cancel`, { method: 'POST' }).catch(() => {});
 });
+
+if ($('exportCloseBtn')) {
+  $('exportCloseBtn').addEventListener('click', () => exportModal.classList.add('hidden'));
+}
+// Clicking the download link is a deliberate action, so the dialog can go.
+if ($('exportDownloadLink')) {
+  $('exportDownloadLink').addEventListener('click', () => {
+    setTimeout(() => exportModal.classList.add('hidden'), 600);
+  });
+}
 
 // â”€â”€â”€ Export: SRT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

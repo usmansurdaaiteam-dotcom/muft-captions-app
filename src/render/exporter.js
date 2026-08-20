@@ -30,14 +30,61 @@ let running = 0;
 /** Finished jobs are kept briefly so the client can still fetch the result. */
 const JOB_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * Is FFmpeg usable?
+ *
+ * Checked up front because it is the one external dependency and a missing one
+ * surfaces as `spawn ffprobe ENOENT`, which tells a user nothing. Cached after
+ * the first success, since it cannot become unavailable while the process runs.
+ */
+let ffmpegChecked = null;
+
+export async function checkFfmpeg({ force = false } = {}) {
+  if (ffmpegChecked && !force) return ffmpegChecked;
+
+  const results = {};
+  for (const binary of ['ffmpeg', 'ffprobe']) {
+    try {
+      const { stdout } = await execFileAsync(binary, ['-version'], { timeout: 15000 });
+      results[binary] = { ok: true, version: String(stdout).split('\n')[0].slice(0, 60) };
+    } catch (err) {
+      results[binary] = {
+        ok: false,
+        missing: err.code === 'ENOENT',
+        reason: err.code === 'ENOENT' ? 'not found on PATH' : err.message
+      };
+    }
+  }
+
+  const ok = results.ffmpeg.ok && results.ffprobe.ok;
+  ffmpegChecked = {
+    ok,
+    ...results,
+    message: ok ? null 
+      : 'FFmpeg is required to read and render video, and it is not available. '
+      + 'Install it and make sure "ffmpeg -version" and "ffprobe -version" both work '
+      + 'in a new terminal, then restart the app. '
+      + 'Windows: winget install Gyan.FFmpeg · macOS: brew install ffmpeg · Linux: apt install ffmpeg'
+  };
+  return ffmpegChecked;
+}
+
 export async function getVideoInfo(videoPath) {
-  const { stdout } = await execFileAsync('ffprobe', [
-    '-v', 'quiet',
-    '-print_format', 'json',
-    '-show_format',
-    '-show_streams',
-    videoPath
-  ], { maxBuffer: 8 * 1024 * 1024 });
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync('ffprobe', [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_format',
+      '-show_streams',
+      videoPath
+    ], { maxBuffer: 8 * 1024 * 1024 }));
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      throw new Error((await checkFfmpeg({ force: true })).message);
+    }
+    throw new Error(`Could not read the video: ${err.message}`);
+  }
 
   const info = JSON.parse(stdout);
   const videoStream = info.streams.find(s => s.codec_type === 'video');
@@ -202,7 +249,13 @@ async function runJob(job) {
       if (code === 0) return resolve('ok');
       reject(new Error(`FFmpeg exited with code ${code}: ${stderr.slice(-400)}`));
     });
-    ffmpeg.on('error', err => reject(new Error(`Could not run FFmpeg: ${err.message}`)));
+    ffmpeg.on('error', async err => {
+      if (err.code === 'ENOENT') {
+        reject(new Error((await checkFfmpeg({ force: true })).message));
+        return;
+      }
+      reject(new Error(`Could not run FFmpeg: ${err.message}`));
+    });
   });
 
   // A dead stdin (FFmpeg gone) must not crash the process.

@@ -13,11 +13,12 @@
     "cookies:to-aistudio": "node scripts/cookies-to-aistudio-auth.mjs",
     "check": "node --check server.js && node --check public/app.js && node --check src/caption-utils.js && node --check src/composition-engine.js",
     "test": "npm run check && npm run test:templates && npm run test:styles && npm run test:gemini",
-    "test:all": "npm test && npm run test:ui && npm run test:wysiwyg && npm run test:export",
+    "test:all": "npm test && npm run test:ui && npm run test:wysiwyg && npm run test:export && npm run test:download",
     "test:templates": "node scripts/check-templates.mjs",
     "test:styles": "node scripts/check-per-line-styles.mjs",
     "test:gemini": "node scripts/test-gemini-client.mjs",
     "test:export": "node scripts/test-export.mjs",
+    "test:download": "node scripts/test-export-download.mjs",
     "test:ui": "node scripts/test-editor-ui.mjs",
     "test:wysiwyg": "node scripts/test-wysiwyg.mjs",
     "preview:templates": "node scripts/preview-templates.mjs"

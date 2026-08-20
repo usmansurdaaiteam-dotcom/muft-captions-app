@@ -2608,3 +2608,34 @@ textarea:focus-visible {
 
 #shortcutsModal .export-modal { max-width: 440px; }
 #shortcutsBtn { min-width: 30px; font-weight: 700; }
+
+/* ═══════════════════ EXPORT DIALOG STATES ═══════════════════ */
+
+.export-error {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  background: rgba(255, 68, 68, 0.1);
+  border: 1px solid rgba(255, 68, 68, 0.4);
+  border-radius: var(--radius-sm);
+  color: #ffb4b4;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.export-error.hidden,
+#exportDownloadLink.hidden,
+#exportProgressWrap.hidden,
+#exportPercent.hidden,
+#exportCloseBtn.hidden,
+#cancelExportBtn.hidden { display: none; }
+
+/* The finished-file link is an anchor, so it needs the button's layout. */
+a#exportDownloadLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+  margin-top: 4px;
+}
