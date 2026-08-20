@@ -133,6 +133,48 @@ export const TEMPLATES = [
     animation: { target: 'line', type: 'zoom', durationMs: 240, from: 1.45 }
   },
 
+  // ── Creator styles ───────────────────────────────────────────────────────────
+  //
+  // Modelled on the named creator presets in the reference gallery. Colours here
+  // are measured and trustworthy — they are flat and saturated, so they survive
+  // compression. Sizes come from two independent readings that agree (the ink
+  // height of the caption, and its width divided by its character count), but
+  // both were taken from a small preview card inside a screen recording, so they
+  // are far less certain than the Muft Glow figures. A full-resolution clip of
+  // either style would let these be measured the way Muft Glow was.
+  {
+    id: 'hormozi-green',
+    name: 'Hormozi Green',
+    category: 'Creator',
+    mode: 'karaoke',
+    // Anton's cap height is 0.86 em, so 131px lands a cap height of 113px —
+    // the 5.9% of frame height measured off the reference, held constant across
+    // frames. Its narrow letterforms also match: 15 caps came to 82% of the
+    // frame width there, and to 82% here.
+    font: { family: 'Anton', weight: 400, size: 131, casing: 'upper', lineHeight: 1.1 },
+    layout: { x: 0.5, y: 0.52, maxWidthPct: 0.9, maxLines: 2, align: 'center', reveal: 'progressive' },
+    word: { fill: solid('#ABF649'), stroke: stroke(9), shadow: shadow(0, 7, 0.95) },
+    // Every word carries the colour in this style; there is no separate
+    // highlight, so the spoken word is marked by movement alone.
+    active: { fill: solid('#ABF649'), stroke: stroke(10), pop: pop(1.09, 180) },
+    animation: { target: 'word', type: 'pop', durationMs: 200, from: 0.8, overshoot: 1.5 }
+  },
+  {
+    id: 'beast-yellow',
+    name: 'Beast Yellow',
+    category: 'Creator',
+    mode: 'karaoke',
+    // Smaller than most of the catalogue, and deliberately: the reference sets
+    // this style around 58px against a 1080-wide frame and sits it low.
+    font: { family: 'Inter', weight: 900, size: 58, casing: 'none', lineHeight: 1.26 },
+    layout: { x: 0.5, y: 0.63, maxWidthPct: 0.86, maxLines: 2, align: 'center', reveal: 'progressive' },
+    // A heavy outline plus a hard offset shadow with no blur, which is what
+    // gives this style its cut-out, stuck-on-the-screen look.
+    word: { fill: solid('#F4F502'), stroke: stroke(9), shadow: shadow(0, 8, 1) },
+    active: { fill: solid('#F4F502'), stroke: stroke(10), pop: pop(1.1, 170) },
+    animation: { target: 'word', type: 'pop', durationMs: 190, from: 0.82, overshoot: 1.6 }
+  },
+
   // ── High retention ───────────────────────────────────────────────────────────
   {
     id: 'bold-yellow',
