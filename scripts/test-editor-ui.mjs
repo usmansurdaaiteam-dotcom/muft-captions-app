@@ -9,6 +9,9 @@
  * Usage: node scripts/test-editor-ui.mjs [baseUrl]
  */
 
+// Read .env the way the server does, so a project with its own
+// ACCESS_PASSWORD is testable without also exporting it to the shell.
+import '../src/load-env.js';
 import puppeteer from 'puppeteer-core';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';

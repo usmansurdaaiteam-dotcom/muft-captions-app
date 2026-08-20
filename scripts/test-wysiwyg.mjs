@@ -16,6 +16,9 @@
  * Usage: node scripts/test-wysiwyg.mjs [baseUrl]
  */
 
+// Read .env the way the server does, so a project with its own
+// ACCESS_PASSWORD is testable without also exporting it to the shell.
+import '../src/load-env.js';
 import puppeteer from 'puppeteer-core';
 import { createCanvas } from '@napi-rs/canvas';
 import { writeFile } from 'node:fs/promises';

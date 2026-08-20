@@ -9,6 +9,9 @@
  * Usage: node scripts/test-export.mjs [baseUrl] [videoFilename]
  */
 
+// Read .env the way the server does, so a project with its own
+// ACCESS_PASSWORD is testable without also exporting it to the shell.
+import '../src/load-env.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeFile, stat, mkdtemp } from 'node:fs/promises';

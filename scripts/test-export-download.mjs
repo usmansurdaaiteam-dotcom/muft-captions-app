@@ -13,6 +13,9 @@
  * Usage: node scripts/test-export-download.mjs [baseUrl]
  */
 
+// Read .env the way the server does, so a project with its own
+// ACCESS_PASSWORD is testable without also exporting it to the shell.
+import '../src/load-env.js';
 import puppeteer from 'puppeteer-core';
 import { mkdtemp, readdir, stat, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
