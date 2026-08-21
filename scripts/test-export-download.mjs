@@ -122,6 +122,29 @@ try {
   }, { timeout: 30000 });
   await new Promise(r => setTimeout(r, 1500));
 
+  // Make the first few status polls fail the way a proxy or tunnel does: an HTML
+  // error page rather than JSON. This is the reported failure — a render that
+  // finished on the server while the editor reported "Unexpected token '<'" and
+  // gave up. Rendering does not care what this tab can reach, so the export must
+  // survive it.
+  const injected = await page.evaluate(() => {
+    const realFetch = window.fetch;
+    window.__pollFailures = 0;
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (/\/api\/export\/[^/]+$/.test(url) && window.__pollFailures < 4) {
+        window.__pollFailures++;
+        return Promise.resolve(new Response(
+          '<!doctype html><html><body><h1>502 Bad Gateway</h1></body></html>',
+          { status: 502, headers: { 'Content-Type': 'text/html' } }
+        ));
+      }
+      return realFetch(input, init);
+    };
+    return true;
+  });
+  check('status polls are stubbed to fail first', injected);
+
   console.log('  clicking Export MP4...');
   await page.click('#exportBtn');
 
@@ -158,6 +181,11 @@ try {
   check('the dialog stays open with the result', finished?.outcome === 'ready',
     finished?.outcome === 'ready' ? ''
       : `outcome was "${finished?.outcome}" — a dialog that closes itself leaves nothing to click`);
+
+  const failures = await page.evaluate(() => window.__pollFailures);
+  check('it rode out the failing polls instead of giving up',
+    failures >= 4 && finished?.outcome === 'ready',
+    `${failures} polls answered with an HTML error page`);
 
   const file = await waitForDownload(downloadDir, 120000);
   check('a file was actually downloaded', !!file, file ? path.basename(file) : `nothing in ${downloadDir}`);

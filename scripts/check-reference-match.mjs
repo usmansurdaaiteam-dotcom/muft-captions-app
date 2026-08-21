@@ -56,9 +56,15 @@ const REFERENCE = {
       supportGapPct: 1.80, supportLeftDeltaPct: null, stackCentreYPct: 44.81
     },
     {
+      // The only phrase here whose support text comes *after* the hero, so the
+      // only one where the diagonal is visible. It is gated on the right edge
+      // matching the hero's, which is the original template's arrangement; the
+      // reference clip puts this line's support on the left instead, so its left
+      // reading is recorded but not gated. See heroSupportAlign in templates.js.
       at: '13.00s', words: ['played', 'for', 'solid'], heroIndex: 0,
       heroCapHeightPct: 7.98, heroCentreXPct: 0.18, supportBandPct: 2.59,
-      supportGapPct: 2.59, supportLeftDeltaPct: -0.71, stackCentreYPct: 44.71
+      supportGapPct: 2.59, supportLeftDeltaPct: null, supportRightDeltaPct: 0,
+      stackCentreYPct: 44.71
     },
     {
       at: '19.50s', words: ['started', 'earning'], heroIndex: 1,
@@ -89,6 +95,7 @@ const REFERENCE = {
     supportBandPct: 0.7,
     supportGapPct: 0.9,
     supportLeftDeltaPct: 1.5,
+    supportRightDeltaPct: 1.5,
     stackCentreYPct: 3.2
   },
   heroColorTolerance: 12
@@ -118,6 +125,7 @@ const METRICS = [
   ['supportBandPct', 'support ink height'],
   ['supportGapPct', 'hero/support gap'],
   ['supportLeftDeltaPct', 'support left edge'],
+  ['supportRightDeltaPct', 'support right edge'],
   ['stackCentreYPct', 'stack centre Y']
 ];
 
@@ -189,6 +197,7 @@ function measureFrame(data, width, height, heroRgb) {
     supportBandPct: null,
     supportGapPct: null,
     supportLeftDeltaPct: null,
+    supportRightDeltaPct: null,
     stackCentreYPct: (heroBand[0] + heroBand[1]) / 2 / height * 100
   };
 
@@ -197,6 +206,7 @@ function measureFrame(data, width, height, heroRgb) {
     out.supportBandPct = (support.b[1] - support.b[0] + 1) / height * 100;
     out.supportGapPct = support.dist / height * 100;
     out.supportLeftDeltaPct = (Math.min(...sPix.map(p => p[0])) - hx0) / width * 100;
+    out.supportRightDeltaPct = (Math.max(...sPix.map(p => p[0])) - hx1) / width * 100;
     out.stackCentreYPct =
       (Math.min(heroBand[0], support.b[0]) + Math.max(heroBand[1], support.b[1])) / 2 / height * 100;
   }

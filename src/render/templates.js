@@ -122,7 +122,15 @@ export const TEMPLATES = [
     // Support text a weight below the hero, pairing Black with ExtraBold as the
     // original did.
     heroSupportWeight: 800,
-    heroSupportAlign: 'left',
+    // The diagonal: words spoken before the hero sit above it and aligned to its
+    // left edge, words spoken after sit below and aligned to its right edge.
+    //
+    // This follows the original template rather than the reference clip. The one
+    // frame in that clip which shows after-text puts it on the left (its left
+    // edge within 2px of the hero's, where right-aligning would be 120px out),
+    // but a single frame is thin evidence against a layout that was deliberate in
+    // the original and asked for since.
+    heroSupportAlign: 'edges',
     heroGapEm: 0.1,
     // The glow is two things, and it needs to be both. An ambient pool lights
     // the footage around the word, and a tight halo follows the letterforms. A

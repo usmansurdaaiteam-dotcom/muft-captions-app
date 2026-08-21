@@ -569,6 +569,9 @@
 
       <div class="modal-meta">
         <span id="exportPercent">0%</span>
+        <!-- Rendering happens on the server, so losing the connection does not
+             lose the video. This asks the server what became of it. -->
+        <button class="cancel-btn hidden" id="exportRetryBtn">Check again</button>
         <button class="cancel-btn" id="cancelExportBtn">Cancel</button>
         <button class="cancel-btn hidden" id="exportCloseBtn">Close</button>
       </div>

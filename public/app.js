@@ -3169,8 +3169,12 @@ const STATUS_LABELS = {
 };
 
 function setExportProgress(percent, label) {
-  exportProgressFill.style.width = `${percent}%`;
-  exportPercent.textContent = `${Math.round(percent)}%`;
+  // A null percent leaves the bar where it was, for messages that report on the
+  // connection rather than on progress.
+  if (percent !== null && percent !== undefined) {
+    exportProgressFill.style.width = `${percent}%`;
+    exportPercent.textContent = `${Math.round(percent)}%`;
+  }
   if (label) exportStatus.textContent = label;
 }
 
@@ -3184,6 +3188,8 @@ function resetExportModal() {
   $('cancelExportBtn').classList.remove('hidden');
   $('exportCloseBtn').classList.add('hidden');
   $('exportPercent').classList.remove('hidden');
+  const retry = $('exportRetryBtn');
+  if (retry) retry.classList.add('hidden');
   setExportProgress(0, 'Starting...');
 }
 
@@ -3194,17 +3200,58 @@ function resetExportModal() {
  * itself, so a failed export looked exactly like nothing happening — the user
  * saw a progress bar, then the editor again, with no explanation.
  */
-function showExportError(message) {
-  $('exportTitle').textContent = 'Export failed';
+function showExportError(message, { jobId } = {}) {
+  $('exportTitle').textContent = jobId ? 'Lost contact with the render' : 'Export failed';
   $('exportProgressWrap').classList.add('hidden');
   $('exportPercent').classList.add('hidden');
   $('exportDownloadLink').classList.add('hidden');
-  exportStatus.textContent = 'The video was not created.';
+  exportStatus.textContent = jobId
+    ? 'The server may have finished it anyway.'
+    : 'The video was not created.';
   const error = $('exportError');
   error.textContent = message;
   error.classList.remove('hidden');
   $('cancelExportBtn').classList.add('hidden');
   $('exportCloseBtn').classList.remove('hidden');
+
+  // Losing the connection is not the same as losing the video. Rendering happens
+  // on the server and keeps going regardless of what this tab can reach, so offer
+  // to look again rather than making the whole render a write-off.
+  const retry = $('exportRetryBtn');
+  if (!retry) return;
+  if (!jobId) {
+    retry.classList.add('hidden');
+    return;
+  }
+  retry.classList.remove('hidden');
+  retry.onclick = async () => {
+    retry.disabled = true;
+    retry.textContent = 'Checking...';
+    try {
+      const res = await fetch(`/api/export/${jobId}`);
+      const job = await readJson(res);
+      if (!res.ok) throw new Error(job.error || 'The server no longer has this render.');
+      if (job.status === 'completed') {
+        const baseName = state.filename.replace(/\.[^/.]+$/, '') || 'captions';
+        showExportReady(withAuthToken(job.downloadUrl), `${baseName}-captioned.mp4`);
+        return;
+      }
+      if (job.status === 'failed') {
+        showExportError(job.error || 'Rendering failed on the server.');
+        return;
+      }
+      // Still going: pick the watch back up where it left off.
+      resetExportModal();
+      state.exporting = true;
+      state.exportJobId = jobId;
+      await watchExportJob(jobId);
+    } catch (err) {
+      showExportError(err.message, { jobId });
+    } finally {
+      retry.disabled = false;
+      retry.textContent = 'Check again';
+    }
+  };
 }
 
 /** Offer the finished file, and try to start the download automatically. */
@@ -3257,30 +3304,35 @@ async function exportMP4() {
       })
     });
 
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || `Could not start the export (HTTP ${response.status})`);
     state.exportJobId = data.jobId;
 
-    const job = await pollExportJob(data.jobId);
-
-    if (job.status === 'cancelled') {
-      setExportProgress(0, STATUS_LABELS.cancelled);
-      setTimeout(() => exportModal.classList.add('hidden'), 1200);
-      return;
-    }
-    if (job.status !== 'completed') {
-      throw new Error(job.error || 'Rendering failed for an unknown reason.');
-    }
-
-    const baseName = state.filename.replace(/\.[^/.]+$/, '') || 'captions';
-    showExportReady(withAuthToken(job.downloadUrl), `${baseName}-captioned.mp4`);
+    await watchExportJob(data.jobId);
   } catch (error) {
     console.error('Export error:', error);
-    showExportError(error.message);
+    showExportError(error.message, error.detached ? { jobId: error.jobId } : {});
   } finally {
     state.exporting = false;
     state.exportJobId = null;
   }
+}
+
+/** Follow a queued render to its end and show whatever it produced. */
+async function watchExportJob(jobId) {
+  const job = await pollExportJob(jobId);
+
+  if (job.status === 'cancelled') {
+    setExportProgress(0, STATUS_LABELS.cancelled);
+    setTimeout(() => exportModal.classList.add('hidden'), 1200);
+    return;
+  }
+  if (job.status !== 'completed') {
+    throw new Error(job.error || 'Rendering failed for an unknown reason.');
+  }
+
+  const baseName = state.filename.replace(/\.[^/.]+$/, '') || 'captions';
+  showExportReady(withAuthToken(job.downloadUrl), `${baseName}-captioned.mp4`);
 }
 
 /**
@@ -3297,19 +3349,105 @@ function withAuthToken(url) {
   return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
 }
 
-async function pollExportJob(jobId) {
+/** Read a response as JSON, or say what it actually was. */
+async function readJson(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // A proxy or tunnel that hiccups answers with an HTML error page, and
+    // JSON.parse reports that as "Unexpected token '<'" — a message that says
+    // nothing about what went wrong.
+    const looksLikeHtml = /^\s*<(!doctype|html)/i.test(text);
+    const error = new Error(looksLikeHtml
+      ? `The server replied with a web page instead of data (HTTP ${res.status}).`
+      : `The server's reply could not be read (HTTP ${res.status}).`);
+    error.transient = looksLikeHtml || res.status >= 500;
+    throw error;
+  }
+}
+
+/**
+ * Watch a render to completion.
+ *
+ * Rendering a minute of video is thousands of frames and minutes of polling, and
+ * over a tunnel or a phone connection some of those polls will fail. They used to
+ * be fatal: one non-200, or one HTML error page from a proxy, and the editor
+ * declared the export dead while the server carried on and finished it happily.
+ *
+ * So a failed poll is now just a failed poll. Only losing contact for a sustained
+ * stretch counts as losing the job, and the interval eases off as the render goes
+ * on, because a long render does not need checking twice a second.
+ */
+const POLL_GIVE_UP_MS = 45000;
+
+async function pollExportJob(jobId, { onDetached } = {}) {
+  let interval = 500;
+  let firstFailureAt = null;
+  let lastError = null;
+
   while (true) {
-    await new Promise(r => setTimeout(r, 500));
-    const res = await fetch(`/api/export/${jobId}`);
-    if (!res.ok) throw new Error('Lost track of the export job.');
-    const job = await res.json();
+    await new Promise(r => setTimeout(r, interval));
 
-    const label = job.status === 'rendering' && job.totalFrames
-      ? `Rendering frame ${job.frame} of ${job.totalFrames}...`
-      : STATUS_LABELS[job.status] || job.status;
-    setExportProgress(job.progress || 0, label);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      let res;
+      try {
+        res = await fetch(`/api/export/${jobId}`, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
 
-    if (['completed', 'failed', 'cancelled'].includes(job.status)) return job;
+      // A 404 means the server genuinely has no such job — worth reporting, but
+      // not immediately, since a proxy can answer 404 on its own behalf.
+      if (!res.ok && res.status !== 404) {
+        const error = new Error(`The server could not report on the render (HTTP ${res.status}).`);
+        error.transient = true;
+        throw error;
+      }
+
+      const job = await readJson(res);
+      if (!res.ok) {
+        const error = new Error(job.error || 'The server no longer has this render.');
+        error.transient = false;
+        throw error;
+      }
+
+      firstFailureAt = null;
+      lastError = null;
+
+      const label = job.status === 'rendering' && job.totalFrames
+        ? `Rendering frame ${job.frame} of ${job.totalFrames}...`
+        : STATUS_LABELS[job.status] || job.status;
+      setExportProgress(job.progress || 0, label);
+
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) return job;
+
+      // Ease off once a render is clearly going to take a while.
+      interval = Math.min(2000, interval + 100);
+    } catch (error) {
+      if (error.transient === false) throw error;
+
+      const now = Date.now();
+      if (firstFailureAt === null) firstFailureAt = now;
+      lastError = error;
+
+      if (now - firstFailureAt >= POLL_GIVE_UP_MS) {
+        const detached = new Error(
+          `Lost contact with the server for ${Math.round((now - firstFailureAt) / 1000)}s ` +
+          `while rendering. The render may still be running — ${error.message}`
+        );
+        detached.jobId = jobId;
+        detached.detached = true;
+        throw detached;
+      }
+
+      // Say so rather than freezing on a stale frame count.
+      setExportProgress(null, 'Connection interrupted, retrying...');
+      if (onDetached) onDetached(lastError);
+      interval = Math.min(4000, Math.max(1000, interval * 2));
+    }
   }
 }
 
