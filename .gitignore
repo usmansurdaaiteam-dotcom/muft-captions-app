@@ -28,3 +28,6 @@ assets/fonts/custom/
 
 # One-off download bundles, never committed.
 public/download/
+
+# Downloadable source packages, generated on demand
+public/muft-captions-*.zip
