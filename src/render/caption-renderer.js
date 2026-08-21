@@ -691,12 +691,29 @@ function placeHeroLayout(ctx, words, template, baseSize, scale, maxWidth, center
   const heroLeft = centerX - heroWidth / 2;
   const heroRight = centerX + heroWidth / 2;
 
-  // 'left' aligns both support lines to the hero's left edge, which is what the
-  // reference does. 'edges' fans them out — before-text on the left, after-text
-  // on the right — for a more diagonal arrangement.
+  /**
+   * Where a support line starts.
+   *
+   * 'left' puts both lines against the hero's left edge. 'edges' fans them into
+   * a diagonal: the words spoken before the hero sit to its upper left, the words
+   * after to its lower right.
+   *
+   * The diagonal cannot simply align to the hero's two edges, because a
+   * one-character hero has both edges in almost the same place — "more than / 7 /
+   * out of 10," came out with the before-text on the right and the after-text on
+   * the left, exactly inverted. So each line is placed by intent: the before-line
+   * is pushed as far left as the hero allows, the after-line as far right, and
+   * both clamp to the hero's opposite edge so a wide hero still gets the tidy
+   * edge alignment the reference shows.
+   */
   const startX = (list) => {
-    if (supportAlign === 'center') return centerX - lineWidth(list) / 2;
-    if (supportAlign === 'edges' && list === afterWords) return heroRight - lineWidth(list);
+    const width = lineWidth(list);
+    if (supportAlign === 'center') return centerX - width / 2;
+    if (supportAlign === 'edges') {
+      return list === afterWords
+        ? Math.max(heroLeft, heroRight - width)
+        : Math.min(heroLeft, heroRight - width);
+    }
     return heroLeft;
   };
 

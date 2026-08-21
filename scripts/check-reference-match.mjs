@@ -439,6 +439,74 @@ async function run() {
     }
   }
 
+  // ── The diagonal, on a hero too narrow to have edges ────────────────────────
+  //
+  // A one-character hero puts its left and right edges in nearly the same place.
+  // Aligning the support lines to those edges then inverts the whole
+  // arrangement: "more than / 7 / out of 10," came out with the before-text to
+  // the right of centre and the after-text to the left. Whatever the hero's
+  // width, the words spoken first belong on the left and the words after on the
+  // right.
+  if (template.heroSupportAlign === 'edges') {
+    const narrowWords = ['more', 'than', '7', 'out', 'of', 'ten'];
+    const narrowTokens = narrowWords.map((text, i) => ({
+      id: i + 1, text, start_ms: i * 400, end_ms: i * 400 + 380
+    }));
+    const narrowComp = {
+      id: 7,
+      token_ids: narrowTokens.map(t => t.id),
+      hero_token_id: 3,
+      comp_type: 'emphasis',
+      start_ms: 0,
+      end_ms: narrowWords.length * 400
+    };
+    clearLayoutCache();
+    ctx.clearRect(0, 0, W, H);
+    renderCaptionFrame(ctx, narrowComp.end_ms - 10, [narrowComp],
+      new Map(narrowTokens.map(t => [t.id, t])), template, W, H);
+
+    // Split the ink into the band above the hero and the band below it, and see
+    // which side of centre each one's weight falls on.
+    const data = ctx.getImageData(0, 0, W, H).data;
+    const rows = [];
+    for (let y = 0; y < H; y++) {
+      let count = 0, sumX = 0;
+      for (let x = 0; x < W; x++) {
+        if (data[(y * W + x) * 4 + 3] > 200) { count++; sumX += x; }
+      }
+      if (count > 3) rows.push({ y, count, sumX });
+    }
+    const bands = [];
+    for (const row of rows) {
+      const last = bands[bands.length - 1];
+      if (last && row.y - last.end <= 3) {
+        last.end = row.y;
+        last.count += row.count;
+        last.sumX += row.sumX;
+      } else {
+        bands.push({ start: row.y, end: row.y, count: row.count, sumX: row.sumX });
+      }
+    }
+
+    console.log('\n  the diagonal on a one-character hero ("more than / 7 / out of ten")');
+    if (bands.length < 3) {
+      failures++;
+      console.log(`    FAIL expected three bands of text, found ${bands.length}`);
+    } else {
+      const centreOf = band => (band.sumX / band.count - W / 2) / W * 100;
+      const before = centreOf(bands[0]);
+      const after = centreOf(bands[bands.length - 1]);
+      const beforeOk = before < -2;
+      const afterOk = after > 2;
+      if (!beforeOk) failures++;
+      if (!afterOk) failures++;
+      console.log(`    ${beforeOk ? 'ok  ' : 'FAIL'} words before the hero sit left of centre   ` +
+        `${before.toFixed(1)}% of frame width`);
+      console.log(`    ${afterOk ? 'ok  ' : 'FAIL'} words after the hero sit right of centre   ` +
+        `${after.toFixed(1)}% of frame width`);
+    }
+  }
+
   if (note.length) {
     console.log('\n  not gated:');
     for (const n of note) console.log(`    ${n}`);
