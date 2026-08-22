@@ -11,6 +11,7 @@ import {
   normalizeSonioxTranscript,
   prepareTokensForV2,
   makeV2CompositionPrompt,
+  countUnromanised,
   parseV2CompositionResponse,
   compositionsToSrt,
   compositionsToVtt,
@@ -490,6 +491,27 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
       }
     }
 
+    // Did the transliteration actually happen? A composer can return good
+    // groupings and simply leave the script alone, which looks like success
+    // everywhere except on screen. Counting what came back unconverted catches
+    // that, and catches the fallback path too.
+    let romanisation = null;
+    if (language.romanize) {
+      const counted = countUnromanised(updatedTokens);
+      // A few stray words are normal — names, or a word the model left alone.
+      // A fifth of the transcript means it did not happen at all.
+      romanisation = {
+        requested: true,
+        complete: counted.share <= 0.2,
+        remaining: counted.remaining,
+        total: counted.total
+      };
+      if (!romanisation.complete) {
+        console.warn(`[V2] Romanisation incomplete: ${counted.remaining} of ${counted.total} ` +
+          `words are still in their original script.`);
+      }
+    }
+
     // Step 4: Save initial project state and return to frontend
     const videoUrl = `/uploads/${req.file.filename}`;
     const projectId = 'proj-' + Date.now();
@@ -518,6 +540,7 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
       token_count: updatedTokens.length,
       composition_count: compositions.length,
       compositionSource,
+      romanisation,
       template: getTemplate(templateId)
     });
 

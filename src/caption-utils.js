@@ -335,6 +335,35 @@ export function prepareTokensForV2(rawTokens = []) {
  * 3. Phrase grouping from tokens
  * 4. Layout assignment
  */
+/**
+ * Scripts the composer is asked to transliterate when a romanising language is
+ * chosen: Arabic (Urdu, Persian), Devanagari (Hindi, Marathi), Gurmukhi
+ * (Punjabi) and Bengali.
+ */
+const NON_LATIN_RE = /[\u0600-\u06FF\u0750-\u077F\u0900-\u097F\u0A00-\u0A7F\u0980-\u09FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+/**
+ * How much of a transcript is still in its original script.
+ *
+ * Asking for Roman output and getting back the original script is a failure the
+ * app used to have no idea about: the composer can answer with perfectly good
+ * groupings and simply not transliterate anything, which looks like success
+ * everywhere except on screen. Counting the words that came back unconverted is
+ * the only reliable signal, since it does not depend on the composer noticing or
+ * admitting it.
+ */
+export function countUnromanised(tokens = []) {
+  let total = 0;
+  let remaining = 0;
+  for (const token of tokens) {
+    const text = String((token && token.text) || '').trim();
+    if (!text) continue;
+    total++;
+    if (NON_LATIN_RE.test(text)) remaining++;
+  }
+  return { total, remaining, share: total ? remaining / total : 0 };
+}
+
 export function makeV2CompositionPrompt(tokens, options = {}) {
   const preserveTerms = options.preserveTerms || [
     'CapCut', 'Gemini', 'ChatGPT', 'Google Flow', 'Flow', 'Nano Banana',

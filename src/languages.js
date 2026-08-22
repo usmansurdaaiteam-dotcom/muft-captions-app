@@ -12,6 +12,14 @@
  * codes for a bilingual pairing is deliberate: the speaker switches mid-sentence
  * and both need to be recognised.
  *
+ * `romanize` decides whether the composer transliterates a non-Latin script into
+ * Roman letters. It is the difference between captions reading "yaar pichle 2
+ * hafton mein" and "یار پچھلے 2 ہفتوں میں", and picking the wrong option is an
+ * easy mistake to make: "Urdu" looks like the obvious choice for an Urdu video,
+ * but it means Urdu script. Labels for those options say which script you will
+ * get, so the consequence is visible before the transcription runs rather than
+ * after.
+ *
  * Every code here is supported by Soniox's stt-async-v5, checked against the
  * live model description. An earlier version of this list was written from a
  * feature document and included Nepali, Sinhala and Pashto, none of which the
@@ -23,30 +31,30 @@ export const LANGUAGES = [
   // The bilingual pairings this tool was built around come first.
   { id: 'en-ur', label: 'English + Urdu (Roman Urdu output)', hints: ['en', 'ur'], romanize: true, group: 'Bilingual' },
   { id: 'en-hi', label: 'English + Hindi (Roman output)', hints: ['en', 'hi'], romanize: true, group: 'Bilingual' },
-  { id: 'en-pa', label: 'English + Punjabi', hints: ['en', 'pa'], romanize: true, group: 'Bilingual' },
-  { id: 'en-bn', label: 'English + Bengali', hints: ['en', 'bn'], romanize: true, group: 'Bilingual' },
-  { id: 'en-ar', label: 'English + Arabic', hints: ['en', 'ar'], romanize: false, group: 'Bilingual' },
+  { id: 'en-pa', label: 'English + Punjabi (Roman output)', hints: ['en', 'pa'], romanize: true, group: 'Bilingual' },
+  { id: 'en-bn', label: 'English + Bengali (Roman output)', hints: ['en', 'bn'], romanize: true, group: 'Bilingual' },
+  { id: 'en-ar', label: 'English + Arabic (Arabic script kept)', hints: ['en', 'ar'], romanize: false, group: 'Bilingual' },
 
   { id: 'en', label: 'English', hints: ['en'], romanize: false, group: 'Single language' },
-  { id: 'ur', label: 'Urdu', hints: ['ur'], romanize: false, group: 'Single language' },
-  { id: 'hi', label: 'Hindi', hints: ['hi'], romanize: false, group: 'Single language' },
-  { id: 'pa', label: 'Punjabi', hints: ['pa'], romanize: false, group: 'Single language' },
-  { id: 'bn', label: 'Bengali', hints: ['bn'], romanize: false, group: 'Single language' },
-  { id: 'ta', label: 'Tamil', hints: ['ta'], romanize: false, group: 'Single language' },
-  { id: 'te', label: 'Telugu', hints: ['te'], romanize: false, group: 'Single language' },
-  { id: 'mr', label: 'Marathi', hints: ['mr'], romanize: false, group: 'Single language' },
-  { id: 'gu', label: 'Gujarati', hints: ['gu'], romanize: false, group: 'Single language' },
-  { id: 'ml', label: 'Malayalam', hints: ['ml'], romanize: false, group: 'Single language' },
-  { id: 'kn', label: 'Kannada', hints: ['kn'], romanize: false, group: 'Single language' },
-  { id: 'ar', label: 'Arabic', hints: ['ar'], romanize: false, group: 'Single language' },
-  { id: 'fa', label: 'Persian', hints: ['fa'], romanize: false, group: 'Single language' },
+  { id: 'ur', label: 'Urdu (Urdu script — اردو)', hints: ['ur'], romanize: false, group: 'Single language' },
+  { id: 'hi', label: 'Hindi (Devanagari — हिन्दी)', hints: ['hi'], romanize: false, group: 'Single language' },
+  { id: 'pa', label: 'Punjabi (Gurmukhi — ਪੰਜਾਬੀ)', hints: ['pa'], romanize: false, group: 'Single language' },
+  { id: 'bn', label: 'Bengali (Bengali script — বাংলা)', hints: ['bn'], romanize: false, group: 'Single language' },
+  { id: 'ta', label: 'Tamil (Tamil script — தமிழ்)', hints: ['ta'], romanize: false, group: 'Single language' },
+  { id: 'te', label: 'Telugu (Telugu script — తెలుగు)', hints: ['te'], romanize: false, group: 'Single language' },
+  { id: 'mr', label: 'Marathi (Devanagari — मराठी)', hints: ['mr'], romanize: false, group: 'Single language' },
+  { id: 'gu', label: 'Gujarati (Gujarati script — ગુજરાતી)', hints: ['gu'], romanize: false, group: 'Single language' },
+  { id: 'ml', label: 'Malayalam (Malayalam script — മലയാളം)', hints: ['ml'], romanize: false, group: 'Single language' },
+  { id: 'kn', label: 'Kannada (Kannada script — ಕನ್ನಡ)', hints: ['kn'], romanize: false, group: 'Single language' },
+  { id: 'ar', label: 'Arabic (Arabic script — العربية)', hints: ['ar'], romanize: false, group: 'Single language' },
+  { id: 'fa', label: 'Persian (Persian script — فارسی)', hints: ['fa'], romanize: false, group: 'Single language' },
   { id: 'tr', label: 'Turkish', hints: ['tr'], romanize: false, group: 'Single language' },
-  { id: 'th', label: 'Thai', hints: ['th'], romanize: false, group: 'Single language' },
+  { id: 'th', label: 'Thai (Thai script — ไทย)', hints: ['th'], romanize: false, group: 'Single language' },
   { id: 'vi', label: 'Vietnamese', hints: ['vi'], romanize: false, group: 'Single language' },
   { id: 'sw', label: 'Swahili', hints: ['sw'], romanize: false, group: 'Single language' },
   { id: 'tl', label: 'Tagalog', hints: ['tl'], romanize: false, group: 'Single language' },
-  { id: 'he', label: 'Hebrew', hints: ['he'], romanize: false, group: 'Single language' },
-  { id: 'uk', label: 'Ukrainian', hints: ['uk'], romanize: false, group: 'Single language' },
+  { id: 'he', label: 'Hebrew (Hebrew script — עברית)', hints: ['he'], romanize: false, group: 'Single language' },
+  { id: 'uk', label: 'Ukrainian (Cyrillic — українська)', hints: ['uk'], romanize: false, group: 'Single language' },
   { id: 'pl', label: 'Polish', hints: ['pl'], romanize: false, group: 'Single language' },
   { id: 'nl', label: 'Dutch', hints: ['nl'], romanize: false, group: 'Single language' },
   { id: 'id', label: 'Indonesian', hints: ['id'], romanize: false, group: 'Single language' },
@@ -56,8 +64,8 @@ export const LANGUAGES = [
   { id: 'fr', label: 'French', hints: ['fr'], romanize: false, group: 'Single language' },
   { id: 'de', label: 'German', hints: ['de'], romanize: false, group: 'Single language' },
   { id: 'it', label: 'Italian', hints: ['it'], romanize: false, group: 'Single language' },
-  { id: 'ru', label: 'Russian', hints: ['ru'], romanize: false, group: 'Single language' },
-  { id: 'zh', label: 'Chinese', hints: ['zh'], romanize: false, group: 'Single language' },
+  { id: 'ru', label: 'Russian (Cyrillic — русский)', hints: ['ru'], romanize: false, group: 'Single language' },
+  { id: 'zh', label: 'Chinese (Chinese characters — 中文)', hints: ['zh'], romanize: false, group: 'Single language' },
   { id: 'ja', label: 'Japanese', hints: ['ja'], romanize: false, group: 'Single language' },
   { id: 'ko', label: 'Korean', hints: ['ko'], romanize: false, group: 'Single language' },
 

@@ -1326,6 +1326,18 @@ uploadForm.addEventListener('submit', async e => {
         'converted to Roman Urdu. Set a GEMINI_API_KEY on the server to restore this.',
         'warning'
       );
+    } else if (data.romanisation && !data.romanisation.complete) {
+      // The composer answered, and answered without transliterating. Worth its
+      // own message: the fix is different from the one above, and without this
+      // the only clue is captions in the wrong script.
+      const { remaining, total } = data.romanisation;
+      showNotice(
+        `Roman output was requested but ${remaining} of ${total} words came back in their ` +
+        'original script. Check the language is "English + Urdu (Roman Urdu output)" rather ' +
+        'than "Urdu", and that the composition backend is healthy — run "npm run credentials:check".',
+        'warning',
+        12000
+      );
     }
 
   } catch (error) {
