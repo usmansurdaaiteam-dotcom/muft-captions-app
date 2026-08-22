@@ -1326,6 +1326,13 @@ uploadForm.addEventListener('submit', async e => {
         'converted to Roman Urdu. Set a GEMINI_API_KEY on the server to restore this.',
         'warning'
       );
+    } else if (data.compositionSource === 'partial') {
+      showNotice(
+        'Some stretches of the video could not be composed by AI. Those parts are grouped ' +
+        'by pauses, and Urdu in them may still be in its original script.',
+        'warning',
+        12000
+      );
     } else if (data.romanisation && !data.romanisation.complete) {
       // The composer answered, and answered without transliterating. Worth its
       // own message: the fix is different from the one above, and without this

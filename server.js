@@ -26,11 +26,11 @@ import {
   GOOGLE_API_BASE
 } from './src/gemini.js';
 import { callGeminiWeb, checkGeminiWebAccess } from './src/gemini-web.js';
+import { composeInChunks } from './src/compose-chunks.js';
 import { getLanguage, listLanguages, validateLanguages, DEFAULT_LANGUAGE_ID } from './src/languages.js';
 import { getSupportedLanguages, verifySonioxAccess } from './src/soniox.js';
 import {
   buildCompositions,
-  buildFallbackCompositions,
   recomputeComposition
 } from './src/composition-engine.js';
 import { registerFonts } from './src/render/fonts-node.js';
@@ -455,41 +455,53 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
     const tokens = prepareTokensForV2(normalized.tokens);
     console.log(`[V2] Merged to ${tokens.length} whole words. (First 5: ${tokens.slice(0, 5).map(t => `"${t.text}"`).join(', ')})`);
 
-    // Step 3: Send to Gemini for composition analysis
-    console.log('[V2] Step 3: Gemini composition analysis...');
-    const geminiPrompt = makeV2CompositionPrompt(tokens, { preserveTerms, language });
-    console.log(`[V2] Gemini prompt size: ${(geminiPrompt.length / 1024).toFixed(1)}KB`);
-    let compositions;
-    let updatedTokens = tokens;
+    // Step 3: Compose, in chunks.
+    //
+    // One request for the whole transcript stops working as a video gets longer,
+    // and it fails misleadingly: the reply comes back truncated, so it is not
+    // valid JSON, so it reads as a parse error rather than as "too long". A
+    // 729-word transcript sent a 96KB prompt and got 2KB of an answer back,
+    // twice, then fell back to pause-grouping with no transliteration.
+    console.log('[V2] Step 3: composition analysis...');
     let compositionSource = 'gemini';
 
-    // Try Gemini up to 2 times
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        console.log(`[V2] Gemini attempt ${attempt}...`);
-        const geminiReply = await callGemini(geminiPrompt, V2_COMPOSITION_SCHEMA);
-        console.log(`[V2] Gemini responded (${geminiReply.length} chars). Parsing compositions...`);
-        const parsed = parseV2CompositionResponse(geminiReply, tokens);
-        updatedTokens = parsed.tokens;
-        compositions = buildCompositions(updatedTokens, { compositions: parsed.compositions });
-        console.log(`[V2] ✓ Built ${compositions.length} compositions from Gemini.`);
-        break; // Success
-      } catch (geminiError) {
-        console.error(`[V2] Gemini attempt ${attempt} failed:`, geminiError.message);
-        if (attempt === 2) {
-          // The fallback picks the longest word as the hero and does no
-          // Roman-Urdu conversion, so the result is noticeably worse. Surface
-          // it to the client rather than letting the quality drop silently.
-          console.warn('[V2] Gemini unavailable — using fallback composition builder.');
-          compositions = buildFallbackCompositions(tokens);
-          compositionSource = 'fallback';
-          console.log(`[V2] Built ${compositions.length} fallback compositions.`);
-        } else {
-          // Wait 2 seconds before retry
-          await new Promise(r => setTimeout(r, 2000));
+    const composed = await composeInChunks(
+      tokens,
+      {
+        callComposer: callGemini,
+        makePrompt: makeV2CompositionPrompt,
+        parseResponse: parseV2CompositionResponse,
+        schema: V2_COMPOSITION_SCHEMA
+      },
+      {
+        language,
+        preserveTerms,
+        onProgress: (p) => {
+          if (p.failed) console.warn(`[V2] chunk ${p.chunk}/${p.of} (${p.words} words) failed: ${p.error}`);
+          else if (p.error) console.warn(`[V2] chunk ${p.chunk}/${p.of} attempt ${p.attempt} failed: ${p.error}`);
+          else console.log(`[V2] chunk ${p.chunk}/${p.of} (${p.words} words) -> ${p.lines} lines`);
         }
       }
+    );
+
+    const updatedTokens = composed.tokens;
+    // Failed chunks are already pause-grouped so every word still has a line.
+    // Source says how much of that grouping was the composer vs the fallback.
+    if (!composed.chunks || composed.failedRanges.length === composed.chunks) {
+      compositionSource = 'fallback';
+      console.warn('[V2] No chunk composed — lines are grouped by pauses only.');
+    } else if (composed.failedRanges.length) {
+      compositionSource = 'partial';
+      console.warn(`[V2] ${composed.failedRanges.length} of ${composed.chunks} chunk(s) ` +
+        'failed; those stretches are grouped by pause.');
     }
+
+    // Pacing and line breaks are global, so they are applied once over the
+    // joined result rather than per chunk.
+    const compositions = buildCompositions(updatedTokens, {
+      compositions: composed.compositions
+    });
+    console.log(`[V2] Built ${compositions.length} compositions from ${composed.chunks} chunk(s).`);
 
     // Did the transliteration actually happen? A composer can return good
     // groupings and simply leave the script alone, which looks like success

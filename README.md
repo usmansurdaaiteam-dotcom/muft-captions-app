@@ -78,8 +78,12 @@ an expired Google session degrades output silently rather than failing.
 ## Caption composition
 
 Grouping words into lines, choosing which word to emphasise, and converting Urdu
-script to Roman Urdu are all done by Gemini. Configure one of the two backends
-below — they take the same request shape, so the app supports either.
+script to Roman Urdu are all done by Gemini. A long transcript is composed in
+pieces of about 140 words, broken at speech pauses, because one request for the
+whole clip comes back truncated and then looks like a parse error. A piece that
+fails is grouped by pauses on its own; the rest keep their proper composition.
+Configure one of the two backends below — they take the same request shape, so
+the app supports either.
 
 Run `npm run gemini:doctor` at any time to see what is actually configured, which
 models the backend offers, and how they compare on a real caption prompt.
@@ -179,6 +183,7 @@ upload ──► Soniox ──────────► Gemini ─────
 | `src/maintenance.js` | Disk usage reporting and cleanup |
 | `src/caption-utils.js` | Transcript normalisation, prompts, subtitle formats |
 | `src/composition-engine.js` | Grouping words into compositions |
+| `src/compose-chunks.js` | Splits a long transcript so composition survives length |
 | `public/` | The editor UI (vanilla JS, no build step) |
 
 The preview and the export import the **same** renderer module, rather than
@@ -279,7 +284,7 @@ instances variable sources into real static weights to make that possible.
 ## Tests
 
 ```bash
-npm test                 # syntax, catalogue, styling, reference match, reveal, Gemini
+npm test                 # syntax, catalogue, styling, reference match, reveal, chunks, Gemini
 npm run test:all         # everything, including the browser tests
 
 npm run test:templates   # every template draws real ink, in frame, at 4 aspect ratios,
@@ -287,6 +292,7 @@ npm run test:templates   # every template draws real ink, in frame, at 4 aspect 
 npm run test:styles      # a line, and a single word inside it, can be restyled alone
 npm run test:reference   # Muft Glow measured against the reference clip, phrase by phrase
 npm run test:reveal      # word-by-word templates reveal in place without reflowing
+npm run test:chunks      # a long transcript still composes when a single request would truncate
 npm run test:gemini      # Gemini client against a stand-in backend: routing, auth,
                          # structured output, retry-on-rejection, retired models
 npm run test:ui          # headless browser: preview renders, controls work, no leaks
@@ -307,7 +313,8 @@ npm run recompose -- projects/<id>.json --write  # and save the result
 
 `recompose` is the way to try a prompt change against real speech without
 spending a transcription, and the way to bring a project composed under older
-pacing rules up to date.
+pacing rules up to date. It uses the same chunked path the server does, so a
+long project is a valid test of both the prompt and the length handling.
 
 ### Matching a reference style
 
