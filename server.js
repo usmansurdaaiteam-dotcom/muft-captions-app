@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { readFile, writeFile, rm, mkdir, stat, readdir } from 'node:fs/promises';
+import { readFile, writeFile, rm, mkdir, stat, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
@@ -31,6 +31,7 @@ import { getLanguage, listLanguages, validateLanguages, DEFAULT_LANGUAGE_ID } fr
 import { getSupportedLanguages, verifySonioxAccess } from './src/soniox.js';
 import {
   buildCompositions,
+  buildFallbackCompositions,
   recomputeComposition
 } from './src/composition-engine.js';
 import { registerFonts } from './src/render/fonts-node.js';
@@ -204,8 +205,16 @@ function resolveUploadPath(videoUrl) {
   return path.join(UPLOADS_DIR, filename);
 }
 
+async function writeProjectFile(id, state) {
+  const dest = path.join(PROJECTS_DIR, `${id}.json`);
+  const tmp = `${dest}.tmp`;
+  await writeFile(tmp, JSON.stringify(state, null, 2));
+  await rename(tmp, dest);
+}
+
 async function readProject(id) {
   const data = await readFile(path.join(PROJECTS_DIR, `${id}.json`), 'utf-8');
+  if (!data.trim()) throw new Error('Project file is empty.');
   return migrateProject(JSON.parse(data));
 }
 
@@ -455,6 +464,27 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
     const tokens = prepareTokensForV2(normalized.tokens);
     console.log(`[V2] Merged to ${tokens.length} whole words. (First 5: ${tokens.slice(0, 5).map(t => `"${t.text}"`).join(', ')})`);
 
+    // Write the transcript before composing. Composition of a long clip can
+    // take minutes, and used to be the only write, so a crash there threw the
+    // transcription away. The draft is grouped by pauses so it is still
+    // openable; a successful compose overwrites it.
+    const videoUrl = `/uploads/${req.file.filename}`;
+    const projectId = 'proj-' + Date.now();
+    const templateId = resolveTemplateId(req.body.templateId);
+    const draftState = {
+      id: projectId,
+      version: PROJECT_VERSION,
+      title: filename,
+      videoUrl,
+      createdAt: Date.now(),
+      tokens,
+      compositions: buildFallbackCompositions(tokens),
+      templateId,
+      styleOverrides: {}
+    };
+    await writeProjectFile(projectId, draftState);
+    console.log(`[V2] Saved transcript as ${projectId} (${tokens.length} words) before composing.`);
+
     // Step 3: Compose, in chunks.
     //
     // One request for the whole transcript stops working as a video gets longer,
@@ -524,25 +554,15 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
       }
     }
 
-    // Step 4: Save initial project state and return to frontend
-    const videoUrl = `/uploads/${req.file.filename}`;
-    const projectId = 'proj-' + Date.now();
-    const templateId = resolveTemplateId(req.body.templateId);
     // A project stores which template it uses, not a copy of the template's
     // style data. Storing the copy meant a project could hold a stale or
     // incompatible template shape that broke rendering when reopened.
     const projectState = {
-      id: projectId,
-      version: PROJECT_VERSION,
-      title: filename,
-      videoUrl,
-      createdAt: Date.now(),
+      ...draftState,
       tokens: updatedTokens,
-      compositions,
-      templateId,
-      styleOverrides: {}
+      compositions
     };
-    await writeFile(path.join(PROJECTS_DIR, `${projectId}.json`), JSON.stringify(projectState, null, 2));
+    await writeProjectFile(projectId, projectState);
 
     res.json({
       ...projectState,
@@ -741,7 +761,7 @@ app.post('/api/projects/:id', checkAuth, async (req, res) => {
       styleOverrides: sanitizeOverrides(incoming.styleOverrides)
     };
 
-    await writeFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), JSON.stringify(projectState, null, 2));
+    await writeProjectFile(req.params.id, projectState);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to save project.' });
