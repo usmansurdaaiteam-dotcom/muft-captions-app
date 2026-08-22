@@ -358,8 +358,12 @@ export function countUnromanised(tokens = []) {
   for (const token of tokens) {
     const text = String((token && token.text) || '').trim();
     if (!text) continue;
+    // An Urdu comma on an otherwise Latin word is not the word still being
+    // in its original script. Count letters, not punctuation.
+    const letters = text.replace(/[^\p{L}\p{N}]+/gu, '');
+    if (!letters) continue;
     total++;
-    if (NON_LATIN_RE.test(text)) remaining++;
+    if (NON_LATIN_RE.test(letters)) remaining++;
   }
   return { total, remaining, share: total ? remaining / total : 0 };
 }
