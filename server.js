@@ -1,145 +1,116 @@
 import express from 'express';
 import multer from 'multer';
-import { readFile, writeFile, rm, mkdir, stat, readdir } from 'node:fs/promises';
+import { readFile, writeFile, rm, mkdir, stat, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { SonioxNodeClient } from '@soniox/node';
+import './src/load-env.js';
 import {
-  buildCaptionBlocks,
-  captionsToSrt,
-  makeLlmCleanupPrompt,
-  mergeCleanedCaptions,
   normalizeSonioxTranscript,
-  safeSettings,
   prepareTokensForV2,
   makeV2CompositionPrompt,
+  countUnromanised,
   parseV2CompositionResponse,
-  compositionsToSrt
+  compositionsToSrt,
+  compositionsToVtt,
+  compositionsToText,
+  V2_COMPOSITION_SCHEMA
 } from './src/caption-utils.js';
+import {
+  callGeminiApi,
+  verifyGeminiAccess,
+  GEMINI_MODELS,
+  DEFAULT_GEMINI_MODEL,
+  GOOGLE_API_BASE
+} from './src/gemini.js';
+import { callGeminiWeb, checkGeminiWebAccess } from './src/gemini-web.js';
+import { composeInChunks } from './src/compose-chunks.js';
+import { getLanguage, listLanguages, validateLanguages, DEFAULT_LANGUAGE_ID } from './src/languages.js';
+import { getSupportedLanguages, verifySonioxAccess } from './src/soniox.js';
 import {
   buildCompositions,
   buildFallbackCompositions,
-  recomputeComposition,
-  resolvePositions,
-  getWordRenderData,
-  GLOW_TEMPLATE,
-  LAYOUTS,
-  LAYOUT_IDS
+  recomputeComposition
 } from './src/composition-engine.js';
-import { exportVideo, getVideoInfo } from './src/frame-renderer.js';
+import { registerFonts } from './src/render/fonts-node.js';
+import { getTemplate, listTemplates, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID } from './src/render/templates.js';
+import { listFamilies, buildFontFaceCss, FONT_FILES } from './src/render/fonts.js';
+import { loadCustomFonts, addCustomFont, removeCustomFont } from './src/render/custom-fonts.js';
+import { getStorageReport, runCleanup } from './src/maintenance.js';
+import { applyStyleOverrides, sanitizeOverrides, sanitizeWordOverrides } from './src/render/style-overrides.js';
+import { startExport, getJob, cancelJob, getVideoInfo, checkFfmpeg } from './src/render/exporter.js';
+import {
+  configureCache as configureMediaCache,
+  getWaveform,
+  getFilmstrip,
+  getPoster
+} from './src/media/analyze.js';
 
 // ─── Credentials ────────────────────────────────────────────────────────────────
-const SONIOX_API_KEY = "88b33b8360aa0c294115cb89e49bbf439d935925fde65c322e67d1a34443dadd";
-const GEMINI_COOKIES = `__Secure-1PAPISID=V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC; __Secure-1PSID=g.a000_Qhw2T9OhwUGK_soDrogaS7yAXpa68w8k929b0koecsL6psiRabzPFhaHcZn73fDZl6GHgACgYKAboSARASFQHGX2Mi6qgmPYCHfwX7ZBC5qspWbBoVAUF8yKoG4h7LaZ3P1350mgx4IxiP0076; __Secure-1PSIDCC=AKEyXzXgcCUfjt0JQbEIJ-aSHFKvZQ5aLAZu9gdnLU5gWaaUgHWkK0VMfjfhiqQfx_oCM5hc; __Secure-1PSIDTS=sidts-CjEByojQU9rMv0KOJfOm-1h1AY-8T_B5QGNVa_HXMl0yDTogxlUw15fkKJr6q8efZPbkEAA; __Secure-3PAPISID=V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC; __Secure-3PSID=g.a000_Qhw2T9OhwUGK_soDrogaS7yAXpa68w8k929b0koecsL6psiJcikN6-d8p0qcRLXJseMbgACgYKAYcSARASFQHGX2MibiloPeTjOwf_c4ITNHKsQRoVAUF8yKqvBQaWkh9YDuXdOTnFJvyk0076; __Secure-3PSIDCC=AKEyXzXP_qVnzywb4q1RBazyy42fyc10uo3LVEEessv0LXE-pV3Zz8viniEVwseza0EropKGsA; __Secure-3PSIDTS=sidts-CjEByojQU9rMv0KOJfOm-1h1AY-8T_B5QGNVa_HXMl0yDTogxlUw15fkKJr6q8efZPbkEAA; _ga=GA1.1.1235861555.1781907535; _ga_BF8Q35BMLM=GS2.1.s1781907535$o1$g1$t1781907537$j58$l0$h0; _ga_WC57KJ50ZZ=GS2.1.s1781907535$o1$g1$t1781907549$j46$l0$h0; _gcl_au=1.1.1725113739.1781907535; APISID=nzDM-ZU4Gjo25lRP/ASMpwLO3Av3WUJreD; COMPASS=gemini-pd=CjwACWuJV93jFYb_b6k1ZbZc5AVi75OXfwVJx6huPFdJgLZgT-iphNSBtyIyTho-2Gurv4U86El7hPmdVFUQzqPc0QYaZgAJa4lX3m9vZsmI6QCgE9yrrbqnT-F_4Be9ffLz_hJnaVJuLoKujHVLrcWURyjXXkDC9BOAOs4u0MyYa17Ls82BAQ_52wOSXejtkKpYLWPS4jjvCXpw8oLZHpNUblsq59rRO7JDiyABMAE; HSID=AdTEr0K3d0enQTv13; NID=532=ilgUIr_tSLbp6cjkHuxdsdYCHK5KyOwSuTlB_CGeUk2X5IBlMjbOahvyKKqSTRescfVA24MUAFTnrhdhMpP2XuSEMJsPtwd2z-2c3DeE1BusyHFj3GBxBKw-c-dv41obw4svN8wXYNKV14iJdECVJUxf7_dTgOyIs5M7K8j_TgruZlvKUa8Se_cKHN_iPaekzG6lyb9nyn7OFwHoScPkwrh1kx6M2BdqO-o93q-AmqaG-1FWW9WN12dU74vcQDKH2pCZFgHkHxwST-Q2tkzQQxxizrglPASqACWS1lC2gXbkrMOjyL5JXyqiA3nRVGtz1qhP19bKLAQqlYUVBAnBAHLPHYI6WBn5XS4IdAu3BN0RHG10BsgT_G3nN19Pj24X3QYg433AYZHkBUzIPNborIW6-MzdtMyYnKJLsIJ2fsP7R-ZKwExd1efirFa7KbwHidK8CHZDHl522U6mKPysy2edorWKL9fGuxen5qARabfCjI-Y2kHZKnpDMP-jVe7bEt500F6KHCtjbnVpN_cILIo62aC79vFxHTcusbgqbXWzXEuJKjsledTUuyMlaZa3J8asJAHH05C0_hH0D49XB9lMA3xq1aJENm3OI6YKz4FkZPQrCARxs3dyhGS7p9Bg; S=billing-ui-v3=0djzWSEegPZhH7bKNoYUVc-6GlC2uLa9wAMRmod-_68:billing-ui-v3-efe=0djzWSEegPZhH7bKNoYUVc-6GlC2uLa9wAMRmod-_68; SAPISID=V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC; SID=g.a000_Qhw2T9OhwUGK_soDrogaS7yAXpa68w8k929b0koecsL6psimdmBj2gZ8tIgJEUXMZysgwACgYKAS4SARASFQHGX2MiriaKGwynhWbVnUjkP7cC_xoVAUF8yKobAl95iI4nuPoc9KCLZ-yd0076; SIDCC=AKEyXzVA2tYqrZj9gjGXdxkd_SvYrYFb0zFCdihqnfV6f6JGQRt_aT0OyvlX1dS1KPXd4Bs6; SSID=AYiY2HTNnjtEVRTMa`;
-const GEMINI_SAPISID = 'V6xV-XcSUIwIAl2-/AlcaLgykPhdSd4YLC';
+//
+// All read from the environment. A .env file in the project root is loaded above
+// if present, so nothing has to be passed on the command line.
+//
+// These used to be literals in this file, which meant every rotation was a code
+// edit and a commit, and the values were readable by anyone with repository
+// access. Run `npm run credentials:check` to confirm what is configured and
+// whether it still works.
+const SONIOX_API_KEY = process.env.SONIOX_API_KEY || '';
 
-// ─── Gemini Web Client ──────────────────────────────────────────────────────────
+/**
+ * Preferred path for the caption-composition step.
+ *
+ * Two supported backends, both speaking the same request shape:
+ *
+ * - Google's API, with a key from https://aistudio.google.com/apikey
+ * - A Gemini-compatible proxy such as AIStudioToAPI, which drives a logged-in
+ *   AI Studio session. Point GEMINI_API_BASE at its /v1beta URL (default
+ *   http://localhost:7860/v1beta) and set GEMINI_API_KEY to one of its API_KEYS.
+ *
+ * Either removes the failure mode of the cookie-based web client further down,
+ * which depends on Google session cookies that expire on their own after a few
+ * weeks. When they do, composition fails and the pipeline falls back to picking
+ * the longest word in each phrase with no script conversion.
+ */
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_API_BASE = process.env.GEMINI_API_BASE || GOOGLE_API_BASE;
+const GEMINI_API_MODEL = process.env.GEMINI_API_MODEL || DEFAULT_GEMINI_MODEL;
 
-function makeSapisidHash(sapisid) {
-  const ts = Math.floor(Date.now() / 1000);
-  const hash = crypto.createHash('sha1').update(`${ts} ${sapisid} https://gemini.google.com`).digest('hex');
-  return `SAPISIDHASH ${ts}_${hash}`;
-}
+/**
+ * Session for the gemini.google.com fallback. Paste a Cookie header from a
+ * logged-in browser into GEMINI_COOKIES; the SAPISID is read out of it, so
+ * GEMINI_SAPISID only needs setting if the cookie string somehow lacks it.
+ */
+const GEMINI_COOKIES = process.env.GEMINI_COOKIES || '';
+const GEMINI_SAPISID = process.env.GEMINI_SAPISID || '';
 
-function cleanGeminiText(text) {
-  return text.replace(
-    /```(?:python|javascript|text)\?code_(?:reference|stdout)&code_event_index=\d+\n.*?```\n?/gs,
-    ''
-  ).trim();
-}
-
-function extractResponseText(raw) {
-  const texts = [];
-  const lines = raw.split("\n");
-  for (const line of lines) {
-    if (!line.includes('"wrb.fr"') || line.length < 200) continue;
+/**
+ * Ask Gemini to analyse captions.
+ *
+ * Prefers the configured API (Google's, or a Gemini-compatible proxy such as
+ * AIStudioToAPI) and falls back to the gemini.google.com session so an existing
+ * deployment keeps working while a backend is being set up.
+ *
+ * @param {string} prompt
+ * @param {object|null} schema optional response schema for structured output
+ */
+async function callGemini(prompt, schema = null) {
+  if (GEMINI_API_KEY) {
     try {
-      const arr = JSON.parse(line);
-      const innerStr = arr[0][2];
-      if (!innerStr || innerStr.length < 50) continue;
-      const inner = JSON.parse(innerStr);
-      if (Array.isArray(inner) && inner.length > 4 && inner[4]) {
-        for (const part of inner[4]) {
-          if (Array.isArray(part) && part.length > 1 && part[1]) {
-            if (Array.isArray(part[1])) {
-              for (const t of part[1]) {
-                if (typeof t === 'string' && t.length > 0) texts.push(t);
-              }
-            }
-          }
-        }
-      }
-    } catch (e) { /* skip */ }
+      const result = await callGeminiApi(prompt, {
+        apiKey: GEMINI_API_KEY,
+        model: GEMINI_API_MODEL,
+        base: GEMINI_API_BASE,
+        schema
+      });
+      return result.text;
+    } catch (err) {
+      console.warn(`[gemini] API call failed (${err.message}); falling back to the web session.`);
+    }
   }
-
-  // If we found response text, use it even if BardErrorInfo appeared
-  let text = "";
-  for (let i = texts.length - 1; i >= 0; i--) {
-    if (texts[i].trim()) { text = texts[i]; break; }
-  }
-
-  if (text) return cleanGeminiText(text);
-
-  // Only error if we have NO extracted text
-  if (raw.includes('BardErrorInfo')) {
-    const m = raw.match(/BardErrorInfo\s*\[(\d+)\]/);
-    throw new Error(`Gemini upstream rejected request: BardErrorInfo [${m ? m[1] : 'unknown'}]`);
-  }
-
-  throw new Error('No response text found in Gemini reply.');
-}
-
-async function callGeminiWeb(prompt) {
-  const inner = Array(80).fill(null);
-  inner[0] = [prompt, 0, null, null, null, null, 0];
-  inner[1] = ["en"];
-  inner[2] = ["", "", "", null, null, null, null, null, null, ""];
-  inner[6] = [0];
-  inner[7] = 1;
-  inner[10] = 1;
-  inner[11] = 0;
-  inner[17] = [[4]];
-  inner[18] = 0;
-  inner[27] = 1;
-  inner[30] = [4];
-  inner[41] = [2];
-  inner[53] = 0;
-  inner[59] = crypto.randomUUID();
-  inner[61] = [];
-  inner[68] = 1;
-  inner[79] = 1;
-
-  const outer = [null, JSON.stringify(inner)];
-  const bodyParams = new URLSearchParams();
-  bodyParams.append('f.req', JSON.stringify(outer));
-
-  const reqid = Math.floor(Date.now() / 1000) % 1000000;
-  const url = `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=boq_assistant-bard-web-server_20260525.09_p0&hl=en&_reqid=${reqid}&rt=c`;
-
-  const headers = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'Origin': 'https://gemini.google.com',
-    'Referer': 'https://gemini.google.com/app',
-    'X-Same-Domain': '1',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Cookie': GEMINI_COOKIES,
-    'Authorization': makeSapisidHash(GEMINI_SAPISID)
-  };
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: headers,
-    body: bodyParams.toString()
-  });
-
-  if (!response.ok) {
-    throw new Error(`Gemini service error: ${response.status} ${response.statusText}`);
-  }
-
-  const rawText = await response.text();
-  return extractResponseText(rawText);
+  return callGeminiWeb(prompt, { cookies: GEMINI_COOKIES, sapisid: GEMINI_SAPISID });
 }
 
 // ─── Server Setup ───────────────────────────────────────────────────────────────
@@ -157,8 +128,11 @@ const __dirname = path.dirname(__filename);
 // Ensure uploads & projects dirs exist
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const PROJECTS_DIR = path.join(__dirname, 'projects');
+const CACHE_DIR = path.join(__dirname, 'cache');
 await mkdir(UPLOADS_DIR, { recursive: true }).catch(() => {});
 await mkdir(PROJECTS_DIR, { recursive: true }).catch(() => {});
+await mkdir(CACHE_DIR, { recursive: true }).catch(() => {});
+configureMediaCache(CACHE_DIR);
 
 const app = express();
 
@@ -176,10 +150,34 @@ const upload = multer({
   limits: { fileSize: 1024 * 1024 * 700 }
 });
 
+// Fonts are held in memory so they can be validated before anything is written.
+const fontUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024 * 12 }
+});
+
+registerFonts();
+await loadCustomFonts();
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR));
-app.use('/templates', express.static(path.join(__dirname, 'templates')));
+// Caption fonts, loaded by the browser preview via @font-face using the same
+// files and aliases the export renderer registers.
+app.use('/assets/fonts', express.static(path.join(__dirname, 'assets', 'fonts'), {
+  maxAge: '30d',
+  immutable: true
+}));
+// The renderer modules themselves, so the preview runs the exact same code as
+// the export instead of a hand-synced copy.
+app.use('/renderer', express.static(path.join(__dirname, 'src', 'render'), {
+  setHeaders: (res) => res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+}));
+
+// @font-face declarations generated from the same registry the exporter uses,
+// so a font name in a template resolves to the same file in both places.
+app.get('/caption-fonts.css', (req, res) => {
+  res.type('text/css').send(buildFontFaceCss('/assets/fonts'));
+});
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
@@ -193,32 +191,174 @@ function parseCsv(value = '') {
   return String(value).split(',').map(x => x.trim()).filter(Boolean);
 }
 
-// ─── Authentication (VPS Protection) ──────────────────────────────────────────
+/** Bumped when the saved project shape changes, so old files can be migrated. */
+const PROJECT_VERSION = 2;
+
+function resolveTemplateId(id) {
+  return TEMPLATE_IDS.includes(id) ? id : DEFAULT_TEMPLATE_ID;
+}
+
+/** Map an uploads-relative URL to a path inside uploads/, refusing traversal. */
+function resolveUploadPath(videoUrl) {
+  const filename = path.basename(String(videoUrl || '').replace(/^\/uploads\//, ''));
+  if (!filename) throw new Error('No video file for this project.');
+  return path.join(UPLOADS_DIR, filename);
+}
+
+async function writeProjectFile(id, state) {
+  const dest = path.join(PROJECTS_DIR, `${id}.json`);
+  const tmp = `${dest}.tmp`;
+  await writeFile(tmp, JSON.stringify(state, null, 2));
+  await rename(tmp, dest);
+}
+
+async function readProject(id) {
+  const data = await readFile(path.join(PROJECTS_DIR, `${id}.json`), 'utf-8');
+  if (!data.trim()) throw new Error('Project file is empty.');
+  return migrateProject(JSON.parse(data));
+}
+
+async function resolveProjectVideo(id) {
+  const project = await readProject(id);
+  const videoPath = resolveUploadPath(project.videoUrl);
+  await stat(videoPath);
+  return videoPath;
+}
+
+/**
+ * Bring a project file up to the current shape.
+ *
+ * Version 1 projects embedded a whole template object. Those embedded copies
+ * came from a style format the renderer no longer understands, which is what
+ * made reopening an older project render nothing, so they are dropped in favour
+ * of a template id.
+ */
+function migrateProject(project) {
+  if (!project || project.version === PROJECT_VERSION) return project;
+
+  const migrated = { ...project, version: PROJECT_VERSION };
+  migrated.templateId = resolveTemplateId(
+    project.templateId || (project.template && project.template.id)
+  );
+  delete migrated.template;
+  migrated.styleOverrides = project.styleOverrides || {};
+  return migrated;
+}
+
+// ─── Access control ─────────────────────────────────────────────────────────────
+// A single shared password for the internal team. Set REQUIRE_PASSWORD=false to
+// drop the gate entirely when the app is only reachable on a trusted network.
 const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD || 'muftcaptions2026';
+const REQUIRE_PASSWORD = process.env.REQUIRE_PASSWORD !== 'false';
 const SESSION_TOKEN = crypto.createHash('sha256').update(ACCESS_PASSWORD).digest('hex');
+const SESSION_COOKIE = 'mc_session';
+
+function cookieValue(req, name) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return null;
+}
+
+/**
+ * The session token arrives as a header from fetch calls, but <video> and
+ * <img> requests cannot set headers, so the same token is also stored in a
+ * cookie for media requests.
+ */
+function isAuthed(req) {
+  if (!REQUIRE_PASSWORD) return true;
+  return req.headers['x-access-token'] === SESSION_TOKEN
+    || cookieValue(req, SESSION_COOKIE) === SESSION_TOKEN
+    // A file download is a plain navigation, which cannot carry a custom header.
+    // The cookie normally covers it, but a browser that declines to send the
+    // cookie on a programmatic download would fail with nothing to show the
+    // user, so the same token is also accepted in the query string.
+    || req.query?.token === SESSION_TOKEN;
+}
 
 function checkAuth(req, res, next) {
-  const token = req.headers['x-access-token'];
-  if (token !== SESSION_TOKEN) {
-    return res.status(401).json({ error: 'Unauthorized. Incorrect or missing access token.' });
-  }
-  next();
+  if (isAuthed(req)) return next();
+  return res.status(401).json({ error: 'Unauthorized. Incorrect or missing access token.' });
+}
+
+function grantSession(res) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Lax`);
 }
 
 app.post('/api/auth', (req, res) => {
-  const { password } = req.body;
-  if (password === ACCESS_PASSWORD) {
+  if (!REQUIRE_PASSWORD || req.body?.password === ACCESS_PASSWORD) {
+    grantSession(res);
     return res.json({ success: true, token: SESSION_TOKEN });
   }
   return res.status(401).json({ error: 'Invalid password' });
 });
 
 app.get('/api/auth/status', (req, res) => {
-  const token = req.headers['x-access-token'];
-  if (token === SESSION_TOKEN) {
-    return res.json({ authenticated: true });
+  const authed = isAuthed(req);
+  // Refresh the media cookie for sessions restored from a stored token.
+  if (authed) grantSession(res);
+  res.json({
+    authenticated: authed,
+    passwordRequired: REQUIRE_PASSWORD,
+    token: authed ? SESSION_TOKEN : undefined
+  });
+});
+
+// Uploaded media is only served to an authenticated session; otherwise every
+// project video is downloadable by anyone who can guess a filename.
+app.use('/uploads', checkAuth, express.static(UPLOADS_DIR));
+
+// ─── Templates & fonts ──────────────────────────────────────────────────────────
+
+app.get('/api/templates', (req, res) => {
+  res.json({ templates: listTemplates(), defaultTemplateId: DEFAULT_TEMPLATE_ID });
+});
+
+app.get('/api/templates/:id', (req, res) => {
+  res.json({ template: getTemplate(req.params.id) });
+});
+
+/** Resolve a template with the editor's style tweaks applied. */
+app.post('/api/templates/:id/resolve', (req, res) => {
+  const template = applyStyleOverrides(
+    getTemplate(req.params.id),
+    sanitizeOverrides(req.body?.styleOverrides)
+  );
+  res.json({ template });
+});
+
+app.get('/api/fonts', (req, res) => {
+  res.json({ families: listFamilies(), custom: FONT_FILES.filter(f => f.custom) });
+});
+
+/**
+ * POST /api/fonts
+ * Upload a font and make it available to templates straight away.
+ */
+app.post('/api/fonts', checkAuth, fontUpload.single('font'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No font file was uploaded.' });
+    const entry = await addCustomFont(
+      req.file.buffer,
+      req.file.originalname || 'font.ttf',
+      req.body.family,
+      req.body.weight
+    );
+    console.log(`[fonts] Added custom font "${entry.family}" (${entry.label}).`);
+    res.json({ font: entry, families: listFamilies() });
+  } catch (error) {
+    res.status(400).json({ error: error?.message || 'Could not add that font.' });
   }
-  return res.json({ authenticated: false });
+});
+
+app.delete('/api/fonts/:family/:weight', checkAuth, async (req, res) => {
+  const removed = await removeCustomFont(req.params.family, req.params.weight);
+  if (!removed) return res.status(404).json({ error: 'That font is not installed.' });
+  res.json({ success: true, families: listFamilies() });
 });
 
 // ─── V2 Endpoints ───────────────────────────────────────────────────────────────
@@ -277,7 +417,8 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
     }
 
     // Step 1: Soniox Transcription
-    console.log('[V2] Step 1: Soniox transcription...');
+    const language = getLanguage(req.body.language || DEFAULT_LANGUAGE_ID);
+    console.log(`[V2] Step 1: Soniox transcription (${language.label})...`);
     const media = await readFile(audioPath);
     const client = new SonioxNodeClient({ api_key: SONIOX_API_KEY });
     const transcription = await client.stt.transcribe({
@@ -285,17 +426,21 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
       file: media,
       filename: audioFilename,
       wait: true,
-      language_hints: ['en', 'ur'],
+      // Hints come from the chosen language rather than being fixed to
+      // English and Urdu, which mis-transcribed anything else.
+      ...(language.hints.length ? { language_hints: language.hints } : {}),
       enable_language_identification: true,
       enable_speaker_diarization: false,
       context: {
         general: [
-          { key: 'domain', value: 'AI creator explainer videos' },
-          { key: 'speech_style', value: 'Pakistani bilingual English and Urdu code-switching' },
-          { key: 'caption_goal', value: 'Keep English as English and Urdu as Urdu for later Roman Urdu conversion' }
+          { key: 'domain', value: 'creator explainer videos' },
+          { key: 'speech_style', value: language.label },
+          { key: 'caption_goal', value: 'Preserve the spoken words and their timing for captioning' }
         ],
         terms: preserveTerms,
-        text: 'The speaker is a Pakistani AI content creator. He often switches between English and Urdu in the same sentence. Preserve AI tool names and creator vocabulary exactly.'
+        text: language.romanize
+          ? 'The speaker mixes languages within a sentence. Preserve tool and brand names exactly.'
+          : 'A creator speaking to camera. Preserve tool and brand names exactly.'
       }
     });
 
@@ -319,62 +464,116 @@ app.post('/api/generate-compositions', checkAuth, upload.single('media'), async 
     const tokens = prepareTokensForV2(normalized.tokens);
     console.log(`[V2] Merged to ${tokens.length} whole words. (First 5: ${tokens.slice(0, 5).map(t => `"${t.text}"`).join(', ')})`);
 
-    // Step 3: Send to Gemini for composition analysis
-    console.log('[V2] Step 3: Gemini composition analysis...');
-    const geminiPrompt = makeV2CompositionPrompt(tokens, { preserveTerms });
-    console.log(`[V2] Gemini prompt size: ${(geminiPrompt.length / 1024).toFixed(1)}KB`);
-    let compositions;
-    let updatedTokens = tokens;
-
-    // Try Gemini up to 2 times
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        console.log(`[V2] Gemini attempt ${attempt}...`);
-        const geminiReply = await callGeminiWeb(geminiPrompt);
-        console.log(`[V2] Gemini responded (${geminiReply.length} chars). Parsing compositions...`);
-        const parsed = parseV2CompositionResponse(geminiReply, tokens);
-        updatedTokens = parsed.tokens;
-        compositions = buildCompositions(updatedTokens, { compositions: parsed.compositions });
-        console.log(`[V2] ✓ Built ${compositions.length} compositions from Gemini.`);
-        break; // Success
-      } catch (geminiError) {
-        console.error(`[V2] Gemini attempt ${attempt} failed:`, geminiError.message);
-        if (attempt === 2) {
-          console.log('[V2] Using fallback composition builder...');
-          compositions = buildFallbackCompositions(tokens);
-          console.log(`[V2] Built ${compositions.length} fallback compositions.`);
-        } else {
-          // Wait 2 seconds before retry
-          await new Promise(r => setTimeout(r, 2000));
-        }
-      }
-    }
-
-    // Step 4: Save initial project state and return to frontend
+    // Write the transcript before composing. Composition of a long clip can
+    // take minutes, and used to be the only write, so a crash there threw the
+    // transcription away. The draft is grouped by pauses so it is still
+    // openable; a successful compose overwrites it.
     const videoUrl = `/uploads/${req.file.filename}`;
     const projectId = 'proj-' + Date.now();
-    const projectState = {
+    const templateId = resolveTemplateId(req.body.templateId);
+    const draftState = {
       id: projectId,
+      version: PROJECT_VERSION,
       title: filename,
       videoUrl,
       createdAt: Date.now(),
-      tokens: updatedTokens,
-      compositions,
-      template: GLOW_TEMPLATE
+      tokens,
+      compositions: buildFallbackCompositions(tokens),
+      templateId,
+      styleOverrides: {}
     };
-    await writeFile(path.join(PROJECTS_DIR, `${projectId}.json`), JSON.stringify(projectState, null, 2));
+    await writeProjectFile(projectId, draftState);
+    console.log(`[V2] Saved transcript as ${projectId} (${tokens.length} words) before composing.`);
+
+    // Step 3: Compose, in chunks.
+    //
+    // One request for the whole transcript stops working as a video gets longer,
+    // and it fails misleadingly: the reply comes back truncated, so it is not
+    // valid JSON, so it reads as a parse error rather than as "too long". A
+    // 729-word transcript sent a 96KB prompt and got 2KB of an answer back,
+    // twice, then fell back to pause-grouping with no transliteration.
+    console.log('[V2] Step 3: composition analysis...');
+    let compositionSource = 'gemini';
+
+    const composed = await composeInChunks(
+      tokens,
+      {
+        callComposer: callGemini,
+        makePrompt: makeV2CompositionPrompt,
+        parseResponse: parseV2CompositionResponse,
+        schema: V2_COMPOSITION_SCHEMA
+      },
+      {
+        language,
+        preserveTerms,
+        onProgress: (p) => {
+          if (p.failed) console.warn(`[V2] chunk ${p.chunk}/${p.of} (${p.words} words) failed: ${p.error}`);
+          else if (p.error) console.warn(`[V2] chunk ${p.chunk}/${p.of} attempt ${p.attempt} failed: ${p.error}`);
+          else console.log(`[V2] chunk ${p.chunk}/${p.of} (${p.words} words) -> ${p.lines} lines`);
+        }
+      }
+    );
+
+    const updatedTokens = composed.tokens;
+    // Failed chunks are already pause-grouped so every word still has a line.
+    // Source says how much of that grouping was the composer vs the fallback.
+    if (!composed.chunks || composed.failedRanges.length === composed.chunks) {
+      compositionSource = 'fallback';
+      console.warn('[V2] No chunk composed — lines are grouped by pauses only.');
+    } else if (composed.failedRanges.length) {
+      compositionSource = 'partial';
+      console.warn(`[V2] ${composed.failedRanges.length} of ${composed.chunks} chunk(s) ` +
+        'failed; those stretches are grouped by pause.');
+    }
+
+    // Pacing and line breaks are global, so they are applied once over the
+    // joined result rather than per chunk.
+    const compositions = buildCompositions(updatedTokens, {
+      compositions: composed.compositions
+    });
+    console.log(`[V2] Built ${compositions.length} compositions from ${composed.chunks} chunk(s).`);
+
+    // Did the transliteration actually happen? A composer can return good
+    // groupings and simply leave the script alone, which looks like success
+    // everywhere except on screen. Counting what came back unconverted catches
+    // that, and catches the fallback path too.
+    let romanisation = null;
+    if (language.romanize) {
+      const counted = countUnromanised(updatedTokens);
+      // A few stray words are normal — names, or a word the model left alone.
+      // A fifth of the transcript means it did not happen at all.
+      romanisation = {
+        requested: true,
+        complete: counted.share <= 0.2,
+        remaining: counted.remaining,
+        total: counted.total
+      };
+      if (!romanisation.complete) {
+        console.warn(`[V2] Romanisation incomplete: ${counted.remaining} of ${counted.total} ` +
+          `words are still in their original script.`);
+      }
+    }
+
+    // A project stores which template it uses, not a copy of the template's
+    // style data. Storing the copy meant a project could hold a stale or
+    // incompatible template shape that broke rendering when reopened.
+    const projectState = {
+      ...draftState,
+      tokens: updatedTokens,
+      compositions
+    };
+    await writeProjectFile(projectId, projectState);
 
     res.json({
+      ...projectState,
       projectId,
       filename,
-      videoUrl,
       transcript_text: normalized.text,
       token_count: updatedTokens.length,
       composition_count: compositions.length,
-      tokens: updatedTokens,
-      compositions,
-      template: GLOW_TEMPLATE,
-      layouts: LAYOUT_IDS
+      compositionSource,
+      romanisation,
+      template: getTemplate(templateId)
     });
 
   } catch (error) {
@@ -423,10 +622,103 @@ app.get('/api/projects', checkAuth, async (req, res) => {
  */
 app.get('/api/projects/:id', checkAuth, async (req, res) => {
   try {
-    const data = await readFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), 'utf-8');
-    res.json(JSON.parse(data));
+    const project = await readProject(req.params.id);
+    // Send the resolved template alongside the project so the client never has
+    // to reconstruct style data from the saved file.
+    res.json({
+      ...project,
+      template: applyStyleOverrides(getTemplate(project.templateId), project.styleOverrides)
+    });
   } catch (error) {
     res.status(404).json({ error: 'Project not found.' });
+  }
+});
+
+/**
+ * GET /api/projects/:id/media
+ * Timeline aids for a project: video dimensions, an audio waveform, and the
+ * metadata for its filmstrip image. One request rather than three, because the
+ * timeline needs all of it before it can draw anything.
+ */
+app.get('/api/projects/:id/media', checkAuth, async (req, res) => {
+  try {
+    const videoPath = await resolveProjectVideo(req.params.id);
+    const info = await getVideoInfo(videoPath);
+
+    // A missing waveform or filmstrip should degrade the timeline, not break
+    // the editor, so each is reported independently.
+    const [waveform, filmstrip] = await Promise.all([
+      getWaveform(videoPath).catch(err => {
+        console.warn(`[media] waveform failed: ${err.message}`);
+        return null;
+      }),
+      getFilmstrip(videoPath, info.duration).catch(err => {
+        console.warn(`[media] filmstrip failed: ${err.message}`);
+        return null;
+      })
+    ]);
+
+    res.json({
+      video: {
+        width: info.width,
+        height: info.height,
+        duration: info.duration,
+        fps: info.fps,
+        hasAudio: info.hasAudio,
+        aspectRatio: info.height ? info.width / info.height : 9 / 16
+      },
+      waveform: waveform ? { peaks: waveform.peaks, hasAudio: waveform.hasAudio } : null,
+      filmstrip: filmstrip ? {
+        url: `/api/projects/${req.params.id}/filmstrip`,
+        frames: filmstrip.frames,
+        frameWidth: filmstrip.frameWidth,
+        frameHeight: filmstrip.frameHeight,
+        totalWidth: filmstrip.totalWidth
+      } : null
+    });
+  } catch (error) {
+    res.status(404).json({ error: error?.message || 'Project media unavailable.' });
+  }
+});
+
+app.get('/api/projects/:id/thumbnail', checkAuth, async (req, res) => {
+  try {
+    const videoPath = await resolveProjectVideo(req.params.id);
+    const info = await getVideoInfo(videoPath);
+    const poster = await getPoster(videoPath, info.duration);
+    res.type('image/jpeg').set('Cache-Control', 'private, max-age=86400').sendFile(poster);
+  } catch (error) {
+    res.status(404).json({ error: error?.message || 'Thumbnail unavailable.' });
+  }
+});
+
+/** Rename a project without touching anything else in it. */
+app.patch('/api/projects/:id', checkAuth, async (req, res) => {
+  try {
+    const project = await readProject(req.params.id);
+    const title = String(req.body?.title || '').trim().slice(0, 200);
+    if (!title) return res.status(400).json({ error: 'A project needs a name.' });
+
+    project.title = title;
+    project.updatedAt = Date.now();
+    await writeFile(
+      path.join(PROJECTS_DIR, `${req.params.id}.json`),
+      JSON.stringify(project, null, 2)
+    );
+    res.json({ success: true, title });
+  } catch (error) {
+    res.status(404).json({ error: 'Project not found.' });
+  }
+});
+
+app.get('/api/projects/:id/filmstrip', checkAuth, async (req, res) => {
+  try {
+    const videoPath = await resolveProjectVideo(req.params.id);
+    const info = await getVideoInfo(videoPath);
+    const strip = await getFilmstrip(videoPath, info.duration);
+    res.type('image/jpeg').set('Cache-Control', 'private, max-age=86400').sendFile(strip.imagePath);
+  } catch (error) {
+    res.status(404).json({ error: error?.message || 'Filmstrip unavailable.' });
   }
 });
 
@@ -436,11 +728,40 @@ app.get('/api/projects/:id', checkAuth, async (req, res) => {
  */
 app.post('/api/projects/:id', checkAuth, async (req, res) => {
   try {
-    const projectState = req.body;
-    if (!projectState || projectState.id !== req.params.id) {
+    const incoming = req.body;
+    if (!incoming || incoming.id !== req.params.id) {
       return res.status(400).json({ error: 'Invalid project state.' });
     }
-    await writeFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), JSON.stringify(projectState, null, 2));
+
+    // Persist only the fields that define a project. Notably the resolved
+    // template object is stripped: it is derived from templateId, and saving a
+    // copy is what previously let stale style data into project files.
+    const projectState = {
+      id: incoming.id,
+      version: PROJECT_VERSION,
+      title: incoming.title || 'Untitled Video',
+      videoUrl: incoming.videoUrl,
+      createdAt: incoming.createdAt || Date.now(),
+      updatedAt: Date.now(),
+      tokens: Array.isArray(incoming.tokens) ? incoming.tokens : [],
+      // A composition may carry its own style overrides; those are filtered to
+      // known keys too, so a project file cannot accumulate arbitrary data.
+      compositions: (Array.isArray(incoming.compositions) ? incoming.compositions : []).map(comp => {
+        if (!comp) return comp;
+        if (!comp.styleOverrides && !comp.wordOverrides) return comp;
+        const { styleOverrides, wordOverrides, ...rest } = comp;
+        const line = sanitizeOverrides(styleOverrides);
+        const words = sanitizeWordOverrides(wordOverrides);
+        const out = { ...rest };
+        if (Object.keys(line).length) out.styleOverrides = line;
+        if (Object.keys(words).length) out.wordOverrides = words;
+        return out;
+      }),
+      templateId: resolveTemplateId(incoming.templateId),
+      styleOverrides: sanitizeOverrides(incoming.styleOverrides)
+    };
+
+    await writeProjectFile(req.params.id, projectState);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to save project.' });
@@ -488,226 +809,274 @@ app.post('/api/recompute-composition', checkAuth, async (req, res) => {
   }
 });
 
-/**
- * POST /api/export-srt
- * Generate SRT from compositions (fallback export).
- */
-app.post('/api/export-srt', checkAuth, async (req, res) => {
+// ─── Storage ────────────────────────────────────────────────────────────────────
+
+const STORAGE_DIRS = () => ({
+  uploadsDir: UPLOADS_DIR,
+  projectsDir: PROJECTS_DIR,
+  cacheDir: CACHE_DIR
+});
+
+app.get('/api/storage', checkAuth, async (req, res) => {
   try {
-    const { compositions, tokens } = req.body;
-    if (!Array.isArray(compositions) || !Array.isArray(tokens)) {
-      return res.status(400).json({ error: 'compositions and tokens must be arrays.' });
-    }
-    const srt = compositionsToSrt(compositions, tokens);
-    res.json({ srt });
+    res.json(await getStorageReport(STORAGE_DIRS()));
   } catch (error) {
-    res.status(400).json({ error: error?.message || 'SRT export failed.' });
+    res.status(500).json({ error: error?.message || 'Could not read storage usage.' });
   }
 });
 
+app.post('/api/storage/cleanup', checkAuth, async (req, res) => {
+  try {
+    const removed = await runCleanup({ ...STORAGE_DIRS(), manual: true });
+    console.log(
+      `[cleanup] removed ${removed.exports} export(s), ${removed.orphans} orphan(s), ` +
+      `${removed.cache} cache file(s), freeing ${(removed.bytes / 1024 / 1024).toFixed(1)} MB`
+    );
+    res.json({ removed, storage: await getStorageReport(STORAGE_DIRS()) });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || 'Cleanup failed.' });
+  }
+});
+
+app.get('/api/languages', (req, res) => {
+  res.json({ languages: listLanguages(), defaultLanguage: DEFAULT_LANGUAGE_ID });
+});
+
+// ─── Caption AI status ──────────────────────────────────────────────────────────
+
 /**
- * GET /api/template
- * Returns the Glow template configuration.
+ * Whether the composition step is properly configured.
+ *
+ * Worth exposing because the failure is otherwise invisible: without a working
+ * API the pipeline still produces captions, just noticeably worse ones.
  */
-app.get('/api/template', (req, res) => {
+app.get('/api/gemini/status', checkAuth, async (req, res) => {
+  const [api, soniox] = await Promise.all([
+    verifyGeminiAccess(GEMINI_API_KEY, GEMINI_API_MODEL, GEMINI_API_BASE),
+    verifySonioxAccess(SONIOX_API_KEY)
+  ]);
+
+  // The web session is only probed when it is the path that would be used, since
+  // the check costs a real round trip to Google.
+  const web = api.ok
+    ? { configured: !!GEMINI_COOKIES, ok: false, skipped: true }
+    : await checkGeminiWebAccess({ cookies: GEMINI_COOKIES, sapisid: GEMINI_SAPISID });
+
   res.json({
-    template: GLOW_TEMPLATE,
-    layouts: LAYOUT_IDS.map(id => ({
-      id,
-      name: LAYOUTS[id].name,
-      description: LAYOUTS[id].description
-    }))
+    ...api,
+    transcription: soniox,
+    webSession: web,
+    usingWebFallback: !api.ok && !!web.ok,
+    compositionWorks: api.ok || !!web.ok,
+    recommendedModels: GEMINI_MODELS,
+    defaultModel: DEFAULT_GEMINI_MODEL
   });
 });
 
 /**
- * POST /api/render-data
- * Get per-word render data for all compositions (used by canvas exporter).
+ * POST /api/export-text
+ * Subtitle and transcript formats, generated from the same composition data the
+ * video render uses so every format stays in step with the edits.
  */
-app.post('/api/render-data', checkAuth, async (req, res) => {
+const TEXT_FORMATS = {
+  srt: { extension: 'srt', mime: 'application/x-subrip', build: compositionsToSrt },
+  vtt: { extension: 'vtt', mime: 'text/vtt', build: compositionsToVtt },
+  txt: {
+    extension: 'txt',
+    mime: 'text/plain',
+    build: (c, t) => compositionsToText(c, t, { timestamps: false })
+  },
+  'txt-timestamps': {
+    extension: 'txt',
+    mime: 'text/plain',
+    build: (c, t) => compositionsToText(c, t, { timestamps: true })
+  }
+};
+
+app.post('/api/export-text', checkAuth, async (req, res) => {
   try {
-    const { compositions, tokens, styleOverrides } = req.body;
+    const { compositions, tokens, format } = req.body;
     if (!Array.isArray(compositions) || !Array.isArray(tokens)) {
       return res.status(400).json({ error: 'compositions and tokens must be arrays.' });
     }
-
-    // Apply style overrides to template
-    const template = JSON.parse(JSON.stringify(GLOW_TEMPLATE));
-    if (styleOverrides) {
-      if (styleOverrides.heroColor) template.hero.color = styleOverrides.heroColor;
-      if (styleOverrides.supportColor) template.support.color = styleOverrides.supportColor;
-      if (styleOverrides.heroFontSize) template.hero.fontSize = styleOverrides.heroFontSize;
-      if (styleOverrides.supportFontSize) template.support.fontSize = styleOverrides.supportFontSize;
-      if (styleOverrides.fontFamily) {
-        template.hero.fontFamily = styleOverrides.fontFamily;
-        template.support.fontFamily = styleOverrides.fontFamily;
-      }
+    const spec = TEXT_FORMATS[format];
+    if (!spec) {
+      return res.status(400).json({
+        error: `Unknown format "${format}". Expected one of: ${Object.keys(TEXT_FORMATS).join(', ')}.`
+      });
     }
-
-    const renderFrames = compositions.map(comp => ({
-      compositionId: comp.id,
-      startMs: comp.start_ms,
-      endMs: comp.end_ms,
-      words: getWordRenderData(comp, tokens, template)
-    }));
-
-    res.json({ renderFrames, template });
+    res.json({
+      content: spec.build(compositions, tokens),
+      extension: spec.extension,
+      mime: spec.mime
+    });
   } catch (error) {
-    res.status(400).json({ error: error?.message || 'Render data generation failed.' });
+    res.status(400).json({ error: error?.message || 'Text export failed.' });
   }
 });
 
-// ─── V1 Backward-Compatible Endpoints ───────────────────────────────────────────
-
-app.post('/api/generate-captions-auto', upload.single('media'), async (req, res) => {
-  let uploadedPath;
-  try {
-    if (!req.file) return res.status(400).json({ error: 'Please upload a media file.' });
-
-    uploadedPath = req.file.path;
-    const media = await readFile(req.file.path);
-    const filename = req.file.originalname || 'input-media.mp4';
-    const customTerms = parseCsv(req.body.terms);
-    const preserveTerms = [...new Set([...DEFAULT_TERMS, ...customTerms])];
-    const settings = safeSettings({
-      maxChars: req.body.maxChars,
-      maxDurationMs: req.body.maxDurationMs,
-      minDurationMs: req.body.minDurationMs,
-      pauseBreakMs: req.body.pauseBreakMs,
-      languageSwitchBreak: req.body.languageSwitchBreak !== 'false'
-    });
-
-    const client = new SonioxNodeClient({ api_key: SONIOX_API_KEY });
-    const transcription = await client.stt.transcribe({
-      model: req.body.model || 'stt-async-v5',
-      file: media,
-      filename,
-      wait: true,
-      language_hints: ['en', 'ur'],
-      enable_language_identification: true,
-      enable_speaker_diarization: false,
-      context: {
-        general: [
-          { key: 'domain', value: 'AI creator explainer videos' },
-          { key: 'speech_style', value: 'Pakistani bilingual English and Urdu code-switching' },
-          { key: 'caption_goal', value: 'Keep English as English and Urdu as Urdu for later Roman Urdu conversion' }
-        ],
-        terms: preserveTerms,
-        text: 'The speaker is a Pakistani AI content creator.'
-      }
-    });
-
-    const transcriptObject = transcription?.getTranscript ? await transcription.getTranscript() : transcription?.transcript;
-    const normalized = normalizeSonioxTranscript(transcriptObject || transcription);
-    if (!normalized.tokens?.length) {
-      return res.status(502).json({ error: 'Soniox returned no timestamped tokens.' });
-    }
-
-    const captions = buildCaptionBlocks(normalized.tokens, settings);
-    const llmPrompt = makeLlmCleanupPrompt(captions, { preserveTerms });
-    const geminiReply = await callGeminiWeb(llmPrompt);
-    const merged = mergeCleanedCaptions(captions, geminiReply);
-    const srt = captionsToSrt(merged);
-
-    res.json({ filename, captions: merged, srt, caption_count: captions.length });
-  } catch (error) {
-    console.error("V1 auto generation error:", error);
-    res.status(500).json({ error: error?.message || 'Auto generation failed.' });
-  } finally {
-    if (uploadedPath) rm(uploadedPath, { force: true }).catch(() => {});
-  }
-});
-
-// ─── Export: Server-side MP4 ────────────────────────────────────────────────────
+// ─── Export: MP4 render jobs ────────────────────────────────────────────────────
 
 /**
- * POST /api/export-mp4
- * Server-side frame-by-frame export.
- * Renders caption frames with @napi-rs/canvas, pipes to FFmpeg for compositing.
- * Returns the finished MP4 file as a download.
+ * POST /api/export
+ * Queues a burn-in render and returns a job id. Rendering happens in the
+ * background so long videos are not bound to the lifetime of one HTTP request.
  */
-app.post('/api/export-mp4', checkAuth, async (req, res) => {
+app.post('/api/export', checkAuth, async (req, res) => {
   try {
-    const { compositions, tokens, templateId, animation, videoUrl } = req.body;
+    const { compositions, tokens, templateId, styleOverrides, videoUrl, title } = req.body;
 
-    if (!compositions?.length || !tokens?.length || !videoUrl) {
-      return res.status(400).json({ error: 'Missing compositions, tokens, or videoUrl.' });
+    if (!Array.isArray(compositions) || !compositions.length) {
+      return res.status(400).json({ error: 'No compositions to render.' });
+    }
+    if (!Array.isArray(tokens) || !tokens.length) {
+      return res.status(400).json({ error: 'No tokens to render.' });
+    }
+    if (!videoUrl) {
+      return res.status(400).json({ error: 'Missing videoUrl.' });
     }
 
-    // Resolve video path from URL
-    const videoFilename = videoUrl.replace(/^\/uploads\//, '');
-    const videoPath = path.join(__dirname, 'uploads', videoFilename);
-
-    // Verify video exists
-    try { await stat(videoPath); } catch {
-      return res.status(404).json({ error: 'Video file not found. Please re-upload.' });
+    let videoPath;
+    try {
+      videoPath = resolveUploadPath(videoUrl);
+      await stat(videoPath);
+    } catch {
+      return res.status(404).json({ error: 'Source video not found. Please re-upload.' });
     }
 
-    // Use custom template overrides from body if provided, fallback to disk config
-    let template = req.body.template;
-    if (!template) {
-      const tmplId = templateId || 'kalakar-glow';
-      const templatePath = path.join(__dirname, 'templates', `${tmplId}.json`);
-      try {
-        const tmplData = await readFile(templatePath, 'utf-8');
-        template = JSON.parse(tmplData);
-      } catch {
-        return res.status(400).json({ error: `Template "${tmplId}" not found.` });
-      }
+    // Fail before queueing rather than after rendering has apparently started:
+    // without FFmpeg the job dies with "spawn ffprobe ENOENT", which tells the
+    // user nothing about what to install.
+    const ffmpeg = await checkFfmpeg();
+    if (!ffmpeg.ok) {
+      return res.status(503).json({ error: ffmpeg.message });
     }
 
-    // Animation config (separate from template)
-    const animationConfig = animation || {
-      type: 'pop_bounce',
-      scaleFrom: 0.82,
-      scalePeak: 1.15,
-      durationMs: 220,
-      peakAtMs: 130
-    };
+    const template = applyStyleOverrides(getTemplate(templateId), sanitizeOverrides(styleOverrides));
+    const outputPath = path.join(UPLOADS_DIR, `export-${Date.now()}.mp4`);
+    const safeTitle = String(title || 'captions').replace(/[^\w\-. ]+/g, '').trim() || 'captions';
 
-    const outputFilename = `export-${Date.now()}.mp4`;
-    const outputPath = path.join(__dirname, 'uploads', outputFilename);
-
-    console.log(`[Export] Starting server-side export for: ${videoFilename}`);
-    console.log(`[Export] Template: ${template.name}, ${compositions.length} compositions, ${tokens.length} tokens`);
-    console.log(`[Export] Custom overrides received: ${req.body.template ? 'YES' : 'NO'}`);
-    console.log(`[Export] Resolved Fonts - Hero: "${template.hero?.fontFamily}", Support: "${template.support?.fontFamily}"`);
-
-    // Build token map
-    const tokenMap = new Map(tokens.map(t => [t.id, t]));
-
-    // Export with progress logging
-    await exportVideo(videoPath, outputPath, compositions, tokenMap, template, animationConfig, (frame, total) => {
-      console.log(`[Export] Frame ${frame}/${total} (${Math.round(frame/total*100)}%)`);
+    const jobId = startExport({
+      videoPath,
+      outputPath,
+      compositions,
+      tokens,
+      template,
+      downloadName: `${safeTitle}-captioned.mp4`
     });
 
-    console.log(`[Export] ✓ Export complete: ${outputFilename}`);
-
-    // Send the file as download
-    res.download(outputPath, `muft-captions-${Date.now()}.mp4`, (err) => {
-      if (err) console.error('[Export] Download error:', err.message);
-      // Clean up export file after download (or after 5 min timeout)
-      setTimeout(() => {
-        rm(outputPath, { force: true }).catch(() => {});
-      }, 5 * 60 * 1000);
-    });
-
+    res.json({ jobId });
   } catch (error) {
-    console.error('[Export] Export failed:', error);
-    res.status(500).json({
-      error: error?.message || 'Export failed.',
-      hint: 'Check FFmpeg installation and video file.'
-    });
+    console.error('[export] Failed to queue:', error);
+    res.status(500).json({ error: error?.message || 'Could not start export.' });
   }
+});
+
+app.get('/api/export/:id', checkAuth, (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'Export job not found.' });
+  res.json({ ...job, outputPath: undefined, downloadUrl: job.outputPath ? `/api/export/${job.id}/download` : null });
+});
+
+app.post('/api/export/:id/cancel', checkAuth, (req, res) => {
+  const cancelled = cancelJob(req.params.id);
+  if (!cancelled) return res.status(409).json({ error: 'Job already finished or not found.' });
+  res.json({ success: true });
+});
+
+app.get('/api/export/:id/download', checkAuth, (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'Export job not found.' });
+  if (job.status !== 'completed' || !job.outputPath) {
+    return res.status(409).json({ error: `Export is ${job.status}.` });
+  }
+  res.download(job.outputPath, job.downloadName, err => {
+    if (err) console.error('[export] Download error:', err.message);
+  });
 });
 
 // ─── Start ──────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\n  ┌─────────────────────────────────────────┐`);
-  console.log(`  │  Muft Captions V2 — Caption Editor      │`);
-  console.log(`  │  http://localhost:${PORT}                    │`);
-  console.log(`  └─────────────────────────────────────────┘\n`);
+  const width = 41;
+  const row = text => `  │${text.padEnd(width)}│`;
+  console.log('');
+  console.log(`  ┌${'─'.repeat(width)}┐`);
+  console.log(row('  Muft Captions — Caption Editor'));
+  console.log(row(`  http://localhost:${PORT}`));
+  console.log(`  └${'─'.repeat(width)}┘`);
+  console.log('');
+  reportCaptionAiStatus();
 });
+
+/**
+ * Say plainly at startup whether captions will actually generate properly.
+ *
+ * None of these failures stop the app. Without a working composition backend
+ * captions are still produced, just with guessed emphasis and no script
+ * conversion — easy to miss for weeks. So each dependency is checked once here
+ * rather than being discovered at the first upload.
+ */
+async function reportCaptionAiStatus() {
+  // FFmpeg first: it is the most common thing to be missing on a fresh machine,
+  // and without it exports fail with an error that says nothing useful.
+  const ffmpeg = await checkFfmpeg();
+  if (ffmpeg.ok) {
+    console.log('[ffmpeg] Ready.');
+  } else {
+    console.warn(`[ffmpeg] NOT AVAILABLE — exports will fail.\n         ${ffmpeg.message}`);
+  }
+
+  // Transcription: nothing works without it.
+  if (!SONIOX_API_KEY) {
+    console.warn('[soniox] No SONIOX_API_KEY set — transcription will fail. See .env.example.');
+  } else {
+    try {
+      const supported = await getSupportedLanguages(SONIOX_API_KEY);
+      const { unsupported } = validateLanguages(supported);
+      console.log(`[soniox] Ready: ${supported.size} languages available.`);
+      if (unsupported.length) {
+        console.warn(
+          `[soniox] Hiding ${unsupported.length} language option(s) the model does not support: ` +
+          unsupported.join(', ')
+        );
+      }
+    } catch (err) {
+      console.warn(`[soniox] Key check failed: ${err.message}`);
+    }
+  }
+
+  // Composition, preferred path.
+  if (GEMINI_API_KEY) {
+    const access = await verifyGeminiAccess(GEMINI_API_KEY, GEMINI_API_MODEL, GEMINI_API_BASE);
+    if (access.ok) {
+      console.log(`[gemini] Ready: ${access.model} via ${access.backend === 'proxy' ? access.base : 'Google'}.`);
+      return;
+    }
+    console.warn(`[gemini] Configured backend not usable: ${access.reason}`);
+    if (access.available?.length) {
+      console.warn(`[gemini] Available there: ${access.available.slice(0, 12).join(', ')}`);
+    }
+  }
+
+  // Composition, fallback path.
+  if (!GEMINI_COOKIES) {
+    console.warn(
+      '[gemini] No composition backend configured. Captions will be grouped by pauses\n' +
+      '         only, emphasis will be the longest word in each line, and non-Latin\n' +
+      '         script will not be converted. Run "npm run credentials:check".'
+    );
+    return;
+  }
+
+  const web = await checkGeminiWebAccess({ cookies: GEMINI_COOKIES, sapisid: GEMINI_SAPISID });
+  if (web.ok) {
+    console.log(`[gemini] Using the gemini.google.com session (${web.elapsedMs}ms round trip).`);
+    console.log('[gemini] That session expires on its own. Prefer GEMINI_API_BASE or GEMINI_API_KEY.');
+  } else {
+    console.warn(`[gemini] The web session is not working: ${web.reason}`);
+    console.warn('[gemini] Captions will be noticeably worse. Run "npm run credentials:check".');
+  }
+}
 

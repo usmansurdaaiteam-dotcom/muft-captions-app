@@ -1,18 +1,42 @@
 {
   "name": "muft-captions-v2",
-  "version": "2.0.0",
-  "description": "Kalakar-style dynamic caption editor with word-level timing, hero word emphasis, and MP4 export.",
+  "version": "2.1.0",
+  "description": "Caption editor with word-level timing, a data-driven template engine, and burned-in MP4 export.",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check src/caption-utils.js && node --check src/composition-engine.js"
+    "fonts": "node scripts/fetch-fonts.mjs",
+    "fixtures": "node scripts/make-fixtures.mjs",
+    "credentials:check": "node scripts/check-credentials.mjs",
+    "gemini:doctor": "node scripts/gemini-doctor.mjs",
+    "cookies:to-aistudio": "node scripts/cookies-to-aistudio-auth.mjs",
+    "check": "node --check server.js && node --check public/app.js && node --check src/caption-utils.js && node --check src/composition-engine.js && node --check src/compose-chunks.js",
+    "test": "npm run check && npm run test:templates && npm run test:styles && npm run test:reference && npm run test:reveal && npm run test:chunks && npm run test:gemini",
+    "test:chunks": "node scripts/check-chunked-composition.mjs",
+    "test:all": "npm test && npm run test:ui && npm run test:wysiwyg && npm run test:export && npm run test:download",
+    "test:templates": "node scripts/check-templates.mjs",
+    "test:styles": "node scripts/check-per-line-styles.mjs",
+    "test:reference": "node scripts/check-reference-match.mjs",
+    "test:reveal": "node scripts/check-word-reveal.mjs",
+    "check:emphasis": "node scripts/check-emphasis-rate.mjs",
+    "check:breaks": "node scripts/check-line-breaks.mjs",
+    "recompose": "node scripts/recompose.mjs",
+    "test:gemini": "node scripts/test-gemini-client.mjs",
+    "test:export": "node scripts/test-export.mjs",
+    "test:download": "node scripts/test-export-download.mjs",
+    "test:ui": "node scripts/test-editor-ui.mjs",
+    "test:wysiwyg": "node scripts/test-wysiwyg.mjs",
+    "preview:templates": "node scripts/preview-templates.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.1",
     "@soniox/node": "latest",
     "express": "latest",
     "multer": "latest"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0"
   },
   "engines": {
     "node": ">=20.0.0"

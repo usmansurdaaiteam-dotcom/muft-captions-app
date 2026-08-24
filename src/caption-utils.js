@@ -335,12 +335,68 @@ export function prepareTokensForV2(rawTokens = []) {
  * 3. Phrase grouping from tokens
  * 4. Layout assignment
  */
+/**
+ * Scripts the composer is asked to transliterate when a romanising language is
+ * chosen: Arabic (Urdu, Persian), Devanagari (Hindi, Marathi), Gurmukhi
+ * (Punjabi) and Bengali.
+ */
+const NON_LATIN_RE = /[\u0600-\u06FF\u0750-\u077F\u0900-\u097F\u0A00-\u0A7F\u0980-\u09FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+/**
+ * How much of a transcript is still in its original script.
+ *
+ * Asking for Roman output and getting back the original script is a failure the
+ * app used to have no idea about: the composer can answer with perfectly good
+ * groupings and simply not transliterate anything, which looks like success
+ * everywhere except on screen. Counting the words that came back unconverted is
+ * the only reliable signal, since it does not depend on the composer noticing or
+ * admitting it.
+ */
+export function countUnromanised(tokens = []) {
+  let total = 0;
+  let remaining = 0;
+  for (const token of tokens) {
+    const text = String((token && token.text) || '').trim();
+    if (!text) continue;
+    // An Urdu comma on an otherwise Latin word is not the word still being
+    // in its original script. Count letters, not punctuation.
+    const letters = text.replace(/[^\p{L}\p{N}]+/gu, '');
+    if (!letters) continue;
+    total++;
+    if (NON_LATIN_RE.test(letters)) remaining++;
+  }
+  return { total, remaining, share: total ? remaining / total : 0 };
+}
+
 export function makeV2CompositionPrompt(tokens, options = {}) {
   const preserveTerms = options.preserveTerms || [
     'CapCut', 'Gemini', 'ChatGPT', 'Google Flow', 'Flow', 'Nano Banana',
     'Kling', 'Veo', 'Sora', 'Runway', 'Midjourney', 'Daffy Studio',
     'MUFT AI', 'Rasta', 'contact sheet', 'moodboard', 'prompt', 'AI campaign'
   ];
+
+  // Script conversion only applies to the bilingual pairings that ask for it.
+  // Requesting it for, say, a Spanish clip would corrupt the transcript.
+  const language = options.language || { label: 'English + Urdu', romanize: true };
+  const scriptRule = language.romanize
+    ? `3. Convert any non-Latin script into natural Roman transliteration. Keep English as English. Do NOT translate — transliterate only.`
+    : `3. Leave every word in the language and script it was spoken in. Do NOT translate or transliterate.`;
+  const spellingRule = language.romanize
+    ? `- Use natural conversational romanisation, e.g. "phir", "hum", "yeh", "karna", "banate hain"`
+    : `- Do not alter spelling beyond fixing obvious recognition errors`;
+
+  // Emphasis is budgeted against the length of the clip rather than as a share
+  // of the lines. A percentage rule quietly turns into a flood on fast speech:
+  // the same minute of talking produces far more compositions, so "a third of
+  // lines" fires far more often. The reference style highlights roughly one word
+  // every 4.3 seconds regardless of how quickly the speaker is talking, so that
+  // is the number to hold, and it needs to be stated as a count.
+  const REFERENCE_SECONDS_PER_EMPHASIS = 4.3;
+  const spanMs = tokens.length
+    ? Math.max(0, tokens[tokens.length - 1].end_ms - tokens[0].start_ms)
+    : 0;
+  const spanSeconds = Math.max(1, Math.round(spanMs / 1000));
+  const emphasisBudget = Math.max(1, Math.round(spanSeconds / REFERENCE_SECONDS_PER_EMPHASIS));
 
   const tokenData = tokens.map((t, index) => {
     const nextToken = tokens[index + 1];
@@ -356,7 +412,8 @@ export function makeV2CompositionPrompt(tokens, options = {}) {
     };
   });
 
-  return `You are a caption composition engine for a Pakistani bilingual YouTube creator.
+  return `You are a caption composition engine for a short-form video creator.
+The spoken language is: ${language.label}.
 
 TASK:
 Given a list of spoken words (tokens) with IDs, group them into visual caption compositions. Each composition is a phrase of 1-8 words that will be displayed as kinetic typography.
@@ -364,18 +421,30 @@ Given a list of spoken words (tokens) with IDs, group them into visual caption c
 FOR EACH COMPOSITION:
 1. Group nearby tokens into natural spoken phrases (1-8 words per group).
 2. Pick ONE hero word per group — the most impactful, emotional, or key word. This word will be displayed LARGE and in a highlight color.
-3. Clean any Urdu script into natural Roman Urdu. Keep English as English.
+${scriptRule}
 4. Assign a "comp_type" to each composition. This controls the visual style:
-   - "emphasis" (35% MAX of compositions): The hero word is displayed LARGE and colored, with before/after support words. Use ONLY for phrases where one word is truly important — emotional peaks, key moments, strong nouns/verbs. Be selective. Quality over quantity.
-   - "plain" (60-65% of compositions): ALL words displayed in normal white text, no hero emphasis. Use for most lines — transitions, filler phrases, normal conversational flow. This is the DEFAULT type.
-   - "spotlight" (OPTIONAL, very rare): ONLY the hero word shown big and centered. Use only for truly dramatic moments. Most scripts need 0-2 spotlights total.
+   - "plain": every word in normal white text, nothing picked out. This is the DEFAULT and the correct answer for MOST lines.
+   - "emphasis": the hero word is displayed LARGE and coloured, with the words before it above and the words after it below.
+   - "spotlight": ONLY the hero word, big and centred. Reserve for a genuinely dramatic beat. Most scripts need 0-2 in total.
 
-RULES FOR comp_type:
-- STRICTLY NO two consecutive "emphasis" compositions. After one emphasis, the NEXT composition MUST be "plain". No exceptions.
-- Only about 1 in 3 lines should be emphasis. If there are 60 compositions, only ~20 should be emphasis.
-- Pick emphasis lines based on script meaning — emphasize emotional words, key moments, important nouns. NOT random words.
-- "plain" is the default. When in doubt, use "plain".
-- The pattern should feel like a professional editor: emphasis lines are impactful BECAUSE they are rare.
+EMPHASIS BUDGET — THIS IS A HARD LIMIT:
+This clip is ${spanSeconds} seconds of speech. Mark AT MOST ${emphasisBudget} composition${emphasisBudget === 1 ? '' : 's'} as "emphasis" or "spotlight" COMBINED, across the whole clip.
+Every other composition must be "plain". Count them before you answer.
+Fewer than ${emphasisBudget} is fine and often better. More than ${emphasisBudget} is wrong.
+
+A word only qualifies for emphasis if it is one of these:
+- a number, quantity, price or date ("40 lakh", "2008", "three years")
+- a proper name of a person, brand, place or product
+- a concrete outcome or result ("earning", "failed", "sold", "doubled")
+- the payoff word of the sentence — the one the whole line is built to deliver
+- a genuine emotional peak, where the speaker's own delivery lifts
+If no word in the line clears that bar, the line is "plain". Most lines are plain. That is expected and correct — connective phrases, setup, asides and filler are all plain.
+
+SPACING RULES:
+- Never place two "emphasis" compositions next to each other.
+- Leave AT LEAST TWO "plain" compositions between any two emphasis compositions.
+- Do not emphasise the same word twice in the clip. If a word already had its moment, later mentions are plain.
+- Emphasis lines land BECAUSE they are rare. A highlight on every other line reads as noise and the viewer stops seeing it.
 
 TIMING & READABILITY RULES:
 1. Observe Speech Pauses: If gap_to_next_ms >= 300 (ms), you must end the current composition there. Never group words across a pause of 300ms or more.
@@ -388,9 +457,9 @@ TIMING & READABILITY RULES:
 GENERAL RULES:
 - hero_token_id must be one of the token IDs in that composition's token_ids array.
 - For "plain" compositions, still include hero_token_id (pick the most notable word) but it won't be visually emphasized.
-- Do NOT translate Urdu to English. Convert to Roman Urdu only.
+- Never translate the meaning into another language.
 - Keep brand names and technical terms exactly: ${preserveTerms.join(', ')}
-- Use natural Pakistani Roman Urdu: "phir", "hum", "yeh", "karna", "banate hain"
+${spellingRule}
 - Return ONLY valid JSON, no markdown, no commentary.
 
 RETURN FORMAT:
@@ -417,12 +486,60 @@ RETURN FORMAT:
   ]
 }
 
-The "cleaned_texts" maps token ID to cleaned text (Roman Urdu conversion applied).
-Only include cleaned_texts entries where the text changed from original (Urdu→Roman Urdu conversion).
+The "cleaned_texts" maps token ID to corrected text.
+Only include an entry where the text actually changed from the original.
 
 INPUT TOKENS:
 ${JSON.stringify(tokenData, null, 2)}`;
 }
+
+/**
+ * JSON Schema for the composition response.
+ *
+ * Passed to the Gemini API as `responseJsonSchema` so the reply is guaranteed to
+ * parse, rather than relying on the tolerant recovery parser below. That parser
+ * stays as a fallback: the cookie-based path returns free text, and a proxy that
+ * drives AI Studio may not honour a schema at all.
+ *
+ * Only the JSON Schema subset the API supports is used here: type, properties,
+ * required, items, enum, additionalProperties, propertyOrdering.
+ */
+export const V2_COMPOSITION_SCHEMA = {
+  type: 'object',
+  propertyOrdering: ['compositions'],
+  properties: {
+    compositions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        propertyOrdering: ['token_ids', 'hero_token_id', 'comp_type', 'cleaned_texts'],
+        properties: {
+          token_ids: {
+            type: 'array',
+            items: { type: 'integer' },
+            description: 'Token ids in this caption line, in spoken order.'
+          },
+          hero_token_id: {
+            type: 'integer',
+            description: 'Which of token_ids is the emphasised word.'
+          },
+          comp_type: {
+            type: 'string',
+            enum: ['emphasis', 'plain', 'spotlight']
+          },
+          cleaned_texts: {
+            type: 'object',
+            // Keys are token ids as strings, so the properties are not fixed.
+            additionalProperties: { type: 'string' },
+            description: 'Corrected text per token id. Only include changed tokens.'
+          }
+        },
+        required: ['token_ids', 'hero_token_id', 'comp_type']
+      }
+    }
+  },
+  required: ['compositions']
+};
 
 /**
  * Parse Gemini's V2 composition response and merge with token data.
@@ -476,19 +593,65 @@ export function parseV2CompositionResponse(geminiOutput, tokens) {
   };
 }
 
+/** One caption line's text and timing, derived from a composition. */
+function compositionLines(compositions = [], tokens = []) {
+  const tokenMap = new Map(tokens.map(t => [t.id, t]));
+  return compositions.map(comp => {
+    const compTokens = (comp.token_ids || []).map(id => tokenMap.get(id)).filter(Boolean);
+    return {
+      text: compTokens.map(t => t.text.trim()).filter(Boolean).join(' '),
+      startMs: comp.start_ms ?? compTokens[0]?.start_ms ?? 0,
+      endMs: comp.end_ms ?? compTokens[compTokens.length - 1]?.end_ms ?? 0
+    };
+  }).filter(line => line.text);
+}
+
 /**
  * Generate a simple SRT from compositions (fallback export).
  */
 export function compositionsToSrt(compositions = [], tokens = []) {
-  const tokenMap = new Map(tokens.map(t => [t.id, t]));
-  
-  return compositions
-    .map((comp, index) => {
-      const compTokens = comp.token_ids.map(id => tokenMap.get(id)).filter(Boolean);
-      const text = compTokens.map(t => t.text.trim()).join(' ');
-      const startMs = comp.start_ms || compTokens[0]?.start_ms || 0;
-      const endMs = comp.end_ms || compTokens[compTokens.length - 1]?.end_ms || 0;
-      return `${index + 1}\n${msToSrtTime(startMs)} --> ${msToSrtTime(endMs)}\n${text}`;
-    })
+  return compositionLines(compositions, tokens)
+    .map((line, index) =>
+      `${index + 1}\n${msToSrtTime(line.startMs)} --> ${msToSrtTime(line.endMs)}\n${line.text}`)
     .join('\n\n') + '\n';
+}
+
+/** WebVTT uses a dot before the milliseconds and a WEBVTT header. */
+export function compositionsToVtt(compositions = [], tokens = []) {
+  const cues = compositionLines(compositions, tokens)
+    .map((line, index) =>
+      `${index + 1}\n` +
+      `${msToSrtTime(line.startMs).replace(',', '.')} --> ${msToSrtTime(line.endMs).replace(',', '.')}\n` +
+      line.text)
+    .join('\n\n');
+  return `WEBVTT\n\n${cues}\n`;
+}
+
+/**
+ * The transcript as readable prose, for repurposing into a script or captions
+ * for another platform. Timestamps are optional because a plain block of text
+ * is usually what someone wants to paste elsewhere.
+ */
+export function compositionsToText(compositions = [], tokens = [], { timestamps = false } = {}) {
+  const lines = compositionLines(compositions, tokens);
+  if (!timestamps) {
+    // Rejoin into paragraphs, breaking where there is a real pause in speech.
+    const paragraphs = [];
+    let current = [];
+    let previousEnd = null;
+    for (const line of lines) {
+      if (previousEnd !== null && line.startMs - previousEnd > 1500 && current.length) {
+        paragraphs.push(current.join(' '));
+        current = [];
+      }
+      current.push(line.text);
+      previousEnd = line.endMs;
+    }
+    if (current.length) paragraphs.push(current.join(' '));
+    return paragraphs.join('\n\n') + '\n';
+  }
+
+  return lines
+    .map(line => `[${msToSrtTime(line.startMs).slice(0, 8)}] ${line.text}`)
+    .join('\n') + '\n';
 }

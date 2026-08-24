@@ -5,10 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Muft Captions V2</title>
   <meta name="description" content="Dynamic caption editor with word-level timing, hero word emphasis, and MP4 export." />
+  <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=2.0.1" />
+  <link rel="stylesheet" href="/style.css?v=2.1.1" />
+  <!-- Caption fonts, served from the same files the export renderer uses. -->
+  <link rel="stylesheet" href="/caption-fonts.css" />
 </head>
 <body class="project-unloaded">
 
@@ -18,14 +21,14 @@
     <!-- Top Bar -->
     <header class="editor-topbar">
       <div class="topbar-left">
-        <div class="topbar-logo">MUFT <span>CAPTIONS</span></div>
+        <button type="button" class="topbar-logo" id="homeBtn" title="Back to homepage">MUFT <span>CAPTIONS</span></button>
         <span class="topbar-filename" id="topbarFilename"></span>
       </div>
       <div class="topbar-right">
         <!-- Caption Tools: Loaded state only -->
         <div class="dropdown loaded-only">
           <button class="topbar-btn secondary" id="captionToolsBtn">
-            Caption Tools â–¾
+            Caption Tools &#9662;
           </button>
           <div class="dropdown-menu hidden" id="captionToolsMenu">
             <button class="dropdown-item" id="stripPunctuationBtn">Strip Punctuation</button>
@@ -48,6 +51,8 @@
           Close Project
         </button>
 
+        <button class="topbar-btn secondary" id="shortcutsBtn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
+
         <!-- Export: Loaded state only -->
         <button class="topbar-btn primary loaded-only" id="exportBtn">
           Export MP4
@@ -60,7 +65,7 @@
 
       <div class="editor-body" id="editorBody">
 
-        <!-- â”€â”€â”€ LEFT PANEL: Captions (Loaded) or Project Dashboard (Unloaded) â”€â”€â”€ -->
+        <!-- --- LEFT PANEL: Captions (Loaded) or Project Dashboard (Unloaded) --- -->
         <aside class="panel panel-captions" id="captionPanel" style="width: 320px;">
           
           <!-- State 1: Unloaded Project List -->
@@ -78,20 +83,22 @@
               </div>
             </div>
 
-            <!-- Free Storage status widget -->
+            <!-- Real disk usage for this install -->
             <div class="sidebar-usage">
               <div class="usage-header">
-                <span class="usage-tag">FREE PLAN</span>
+                <span class="usage-tag">DISK USAGE</span>
+                <span class="usage-projects" id="usageProjects"></span>
               </div>
               <div class="usage-item">
-                <div class="usage-label">Storage <span>0.4 GB / 5.0 GB</span></div>
-                <div class="progress-bar"><div class="progress-fill" style="width: 8%;"></div></div>
+                <div class="usage-label">Videos <span id="usageUploads">—</span></div>
               </div>
               <div class="usage-item">
-                <div class="usage-label">Transcription <span>1.1 mins left</span></div>
-                <div class="progress-bar"><div class="progress-fill" style="width: 22%;"></div></div>
+                <div class="usage-label">Timeline cache <span id="usageCache">—</span></div>
               </div>
-              <button class="upgrade-btn">Upgrade Account</button>
+              <div class="usage-item hidden" id="usageReclaimItem">
+                <div class="usage-label">Reclaimable <span id="usageReclaim">—</span></div>
+              </div>
+              <button class="upgrade-btn" id="cleanupBtn">Free up space</button>
             </div>
           </div>
 
@@ -99,11 +106,41 @@
           <div id="loadedLeftState" class="loaded-left-state hidden">
             <div class="panel-header">
               <h2>Captions</h2>
-              <div class="view-toggle">
-                <button class="toggle-btn active" id="wordViewBtn" data-view="word">WORD</button>
-                <button class="toggle-btn" id="lineViewBtn" data-view="line">LINE</button>
+              <div class="panel-header-actions">
+                <button class="icon-btn" id="findReplaceBtn" title="Find and replace (Ctrl+F)" aria-label="Find and replace">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </button>
+                <div class="view-toggle">
+                  <button class="toggle-btn active" id="wordViewBtn" data-view="word">WORD</button>
+                  <button class="toggle-btn" id="lineViewBtn" data-view="line">LINE</button>
+                </div>
               </div>
             </div>
+
+            <div class="find-replace hidden" id="findReplacePanel">
+              <div class="find-replace-row">
+                <input type="text" id="findInput" placeholder="Find word" aria-label="Find" />
+                <span class="find-count" id="findCount"></span>
+              </div>
+              <div class="find-replace-row">
+                <input type="text" id="replaceInput" placeholder="Replace with" aria-label="Replace with" />
+              </div>
+              <div class="find-replace-actions">
+                <label class="find-option">
+                  <input type="checkbox" id="findWholeWord" checked />
+                  <span>Whole word</span>
+                </label>
+                <label class="find-option">
+                  <input type="checkbox" id="findMatchCase" />
+                  <span>Match case</span>
+                </label>
+              </div>
+              <div class="find-replace-actions">
+                <button class="style-btn" id="replaceAllBtn">Replace all</button>
+                <button class="style-btn ghost" id="closeFindBtn">Close</button>
+              </div>
+            </div>
+
             <div class="caption-list" id="captionList">
               <!-- Compositions text blocks populate dynamically -->
             </div>
@@ -113,7 +150,7 @@
 
 
 
-        <!-- â”€â”€â”€ CENTER PANEL: Upload Area (Unloaded) or Video Preview (Loaded) â”€â”€â”€ -->
+        <!-- --- CENTER PANEL: Upload Area (Unloaded) or Video Preview (Loaded) --- -->
         <main class="panel panel-video" id="videoPanel">
           
           <!-- State 1: Unloaded Upload Area -->
@@ -125,11 +162,15 @@
                   <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                   </svg>
-                  <div class="upload-label"><span class="upload-browse">Drop your videos here</span> or click to upload</div>
-                  <div class="upload-formats">Max 2:00 minutes, 1GB &nbsp;|&nbsp; Supports: MP4, MOV</div>
+                  <div class="upload-label"><span class="upload-browse">Drop a video here</span> or click to choose one</div>
+                  <div class="upload-formats">Up to 700 MB &nbsp;|&nbsp; MP4, MOV, WebM, or an audio file</div>
                   <div class="upload-selected" id="uploadSelected"></div>
                 </div>
               </div>
+              <label class="upload-option">
+                <span>Spoken language</span>
+                <select name="language" id="languageSelect"></select>
+              </label>
               <button type="submit" class="upload-btn" id="uploadBtn">
                 <span>Generate Captions</span>
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
@@ -149,6 +190,16 @@
             <div class="video-container" id="videoContainer">
               <video id="videoPlayer" playsinline></video>
               <canvas id="captionCanvas" width="1080" height="1920"></canvas>
+              <!-- Regions covered by platform interface, so captions are not
+                   placed underneath a like button or the platform's own caption. -->
+              <div id="safeZones" class="safe-zones hidden" aria-hidden="true">
+                <div class="safe-zone safe-zone-top"><span>Top bar</span></div>
+                <div class="safe-zone safe-zone-right"><span>Actions</span></div>
+                <div class="safe-zone safe-zone-bottom"><span>Caption &amp; audio</span></div>
+              </div>
+              <!-- Alignment guides, shown only while a drag is snapped -->
+              <div id="dragGuideV" class="drag-guide drag-guide-v hidden"></div>
+              <div id="dragGuideH" class="drag-guide drag-guide-h hidden"></div>
               <div id="canvasSelectOutline" class="canvas-select-outline hidden">
                 <div class="handle top-left"></div>
                 <div class="handle top-right"></div>
@@ -157,11 +208,13 @@
               </div>
             </div>
             <div class="video-controls">
-              <button class="ctrl-btn" id="playPauseBtn" title="Play/Pause">
+              <button class="ctrl-btn" id="playPauseBtn" title="Play / pause (Space)" aria-label="Play or pause">
                 <svg id="playIcon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <svg id="pauseIcon" class="hidden" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
               </button>
               <span class="time-display" id="timeDisplay">00:00:00 / 00:00:00</span>
+              <span class="video-meta" id="videoMeta"></span>
+              <button class="ctrl-toggle" id="safeZoneBtn" title="Show the areas platform interface covers" aria-pressed="false">Safe zones</button>
             </div>
           </div>
 
@@ -169,7 +222,7 @@
 
 
 
-        <!-- â”€â”€â”€ RIGHT PANEL: LOCKED State (Unloaded) or Style Inspector (Loaded) â”€â”€â”€ -->
+        <!-- --- RIGHT PANEL: LOCKED State (Unloaded) or Style Inspector (Loaded) --- -->
         <aside class="panel panel-style" id="stylePanel" style="width: 280px;">
           
           <!-- State 1: Unloaded Locked Inspector -->
@@ -185,192 +238,272 @@
 
           <!-- State 2: Loaded Template & Style Editor -->
           <div id="loadedRightState" class="loaded-right-state hidden">
-            <div class="panel-header">
-              <h2>Templates</h2>
+
+            <div class="inspector-tabs" role="tablist">
+              <button class="inspector-tab active" id="tabTemplates" data-tab="templates" role="tab" aria-selected="true">Templates</button>
+              <button class="inspector-tab" id="tabText" data-tab="text" role="tab" aria-selected="false">Text</button>
+              <button class="inspector-tab" id="tabMotion" data-tab="motion" role="tab" aria-selected="false">Motion</button>
+              <button class="inspector-tab" id="tabExport" data-tab="export" role="tab" aria-selected="false">Export</button>
             </div>
 
-            <!-- Template Card -->
-            <div class="template-section">
-              <div class="template-card active" id="glowTemplateCard">
-                <div class="template-preview glow-preview">
-                  <span class="tp-support">the quick</span>
-                  <span class="tp-hero">BROWN</span>
-                  <span class="tp-support">fox</span>
-                </div>
-                <div class="template-info">
-                  <span class="template-name">Muft Glow</span>
-                  <span class="template-badge">Active</span>
-                </div>
+            <!-- ── TEMPLATES ── -->
+            <div class="inspector-panel" data-panel="templates">
+              <div class="inspector-search">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="templateSearch" placeholder="Find a template..." aria-label="Search templates" />
               </div>
+              <div class="template-categories" id="templateCategories"></div>
+              <div class="template-gallery" id="templateGallery"></div>
             </div>
 
-            <!-- Style Accordion Controls -->
-            <div class="style-controls">
-              <div class="style-inspector-header">
-                <h3>Style Inspector</h3>
-                <label class="apply-all-checkbox-label">
-                  <input type="checkbox" id="applyToAllToggle" checked />
-                  <span>Apply to all</span>
+            <!-- ── TEXT ── -->
+            <div class="inspector-panel hidden" data-panel="text">
+              <div class="scope-switch">
+                <span class="scope-label">Changes apply to</span>
+                <div class="scope-options">
+                  <button class="scope-btn active" id="scopeAllBtn" data-scope="all">All lines</button>
+                  <button class="scope-btn" id="scopeLineBtn" data-scope="line">This line</button>
+                </div>
+                <p class="scope-hint hidden" id="scopeHint"></p>
+              </div>
+
+              <div class="control-group">
+                <h4>Font</h4>
+                <label class="style-label">
+                  Family
+                  <select id="soFontFamily"></select>
+                </label>
+                <label class="style-label">
+                  Weight
+                  <select id="soFontWeight"></select>
+                </label>
+                <div class="font-upload">
+                  <label class="export-alt-btn font-upload-btn">
+                    Upload a font
+                    <input type="file" id="fontUploadInput" accept=".ttf,.otf" hidden />
+                  </label>
+                  <p class="control-hint">TTF or OTF only, so the font renders identically in the export.</p>
+                </div>
+                <label class="style-label">
+                  Size <output id="soFontSizeVal">80</output>px
+                  <input type="range" id="soFontSize" min="28" max="160" step="1" value="80" />
+                </label>
+                <label class="style-label">
+                  Capitalisation
+                  <select id="soCasing">
+                    <option value="none">As spoken</option>
+                    <option value="upper">UPPERCASE</option>
+                    <option value="lower">lowercase</option>
+                    <option value="title">Title Case</option>
+                  </select>
                 </label>
               </div>
 
-              <!-- 1. FONTS -->
-              <details class="style-accordion" open>
-                <summary>FONTS</summary>
-                <div class="accordion-content">
+              <div class="control-group">
+                <h4>Colour</h4>
+                <label class="style-label">
+                  Normal words
+                  <div class="color-row">
+                    <input type="color" id="soBaseColor" value="#FFFFFF" />
+                    <span class="color-hex" id="soBaseColorHex">#FFFFFF</span>
+                  </div>
+                </label>
+                <label class="style-label">
+                  Highlighted word
+                  <div class="color-row">
+                    <input type="color" id="soActiveColor" value="#00FFB2" />
+                    <span class="color-hex" id="soActiveColorHex">#00FFB2</span>
+                  </div>
+                </label>
+              </div>
+
+              <div class="control-group">
+                <h4>Position</h4>
+                <label class="style-label">
+                  Vertical <output id="soYVal">72</output>%
+                  <input type="range" id="soY" min="8" max="94" step="1" value="72" />
+                </label>
+                <label class="style-label">
+                  Horizontal <output id="soXVal">50</output>%
+                  <input type="range" id="soX" min="10" max="90" step="1" value="50" />
+                </label>
+                <label class="style-label">
+                  Max width <output id="soMaxWidthVal">88</output>%
+                  <input type="range" id="soMaxWidth" min="40" max="98" step="1" value="88" />
+                </label>
+                <div class="control-row">
                   <label class="style-label">
-                    Font Family
-                    <select id="fontSelect">
-                      <option value="'Space Grotesk', sans-serif" selected>Space Grotesk</option>
-                      <option value="'Inter', sans-serif">Inter</option>
-                      <option value="Impact, sans-serif">Impact</option>
-                      <option value="'Arial Black', sans-serif">Arial Black</option>
-                      <option value="'Segoe UI', sans-serif">Segoe UI</option>
-                      <option value="Georgia, serif">Georgia</option>
+                    Lines
+                    <select id="soMaxLines">
+                      <option value="1">1</option>
+                      <option value="2" selected>2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </label>
+                  <label class="style-label">
+                    Align
+                    <select id="soAlign">
+                      <option value="center" selected>Center</option>
+                      <option value="left">Left</option>
+                      <option value="right">Right</option>
                     </select>
                   </label>
                 </div>
-              </details>
+              </div>
 
-              <!-- 2. FORMAT -->
-              <details class="style-accordion">
-                <summary>FORMAT</summary>
-                <div class="accordion-content">
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="heroUppercaseToggle" checked />
-                    <span>Hero Uppercase</span>
-                  </label>
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="supportUppercaseToggle" />
-                    <span>Support Uppercase</span>
-                  </label>
-                </div>
-              </details>
+              <div class="control-group">
+                <h4>Spacing</h4>
+                <label class="style-label">
+                  Letter spacing <output id="soLetterSpacingVal">0</output>px
+                  <input type="range" id="soLetterSpacing" min="-4" max="16" step="1" value="0" />
+                </label>
+                <label class="style-label">
+                  Line height <output id="soLineHeightVal">1.20</output>
+                  <input type="range" id="soLineHeight" min="0.9" max="2" step="0.02" value="1.2" />
+                </label>
+              </div>
 
-              <!-- 3. POSITION -->
-              <details class="style-accordion">
-                <summary>POSITION</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Vertical Position: <span id="captionYVal">55</span>%
-                    <input type="range" id="captionYSlider" min="10" max="90" value="55" />
-                  </label>
-                  <label class="style-label">
-                    Horizontal Position: <span id="captionXVal">50</span>%
-                    <input type="range" id="captionXSlider" min="10" max="90" value="50" />
-                  </label>
-                </div>
-              </details>
+              <div class="control-group">
+                <h4>Effects</h4>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soStrokeEnabled" />
+                  <span>Outline</span>
+                </label>
+                <label class="style-label">
+                  Outline width <output id="soStrokeWidthVal">4</output>px
+                  <input type="range" id="soStrokeWidth" min="0" max="16" step="1" value="4" />
+                </label>
+                <label class="style-label">
+                  Outline colour
+                  <div class="color-row">
+                    <input type="color" id="soStrokeColor" value="#000000" />
+                    <span class="color-hex" id="soStrokeColorHex">#000000</span>
+                  </div>
+                </label>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soShadowEnabled" checked />
+                  <span>Drop shadow</span>
+                </label>
+                <label class="style-label">
+                  Shadow blur <output id="soShadowBlurVal">14</output>px
+                  <input type="range" id="soShadowBlur" min="0" max="48" step="1" value="14" />
+                </label>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soGlowEnabled" />
+                  <span>Glow on highlighted word</span>
+                </label>
+                <label class="style-label">
+                  Glow colour
+                  <div class="color-row">
+                    <input type="color" id="soGlowColor" value="#00FFB2" />
+                    <span class="color-hex" id="soGlowColorHex">#00FFB2</span>
+                  </div>
+                </label>
+              </div>
 
-              <!-- 4. COLOR -->
-              <details class="style-accordion">
-                <summary>COLOR</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Hero Color
-                    <div class="color-row">
-                      <input type="color" id="heroColorPicker" value="#f5b942" />
-                      <span class="color-hex" id="heroColorHex">#f5b942</span>
-                    </div>
-                  </label>
-                  <label class="style-label">
-                    Support Color
-                    <div class="color-row">
-                      <input type="color" id="supportColorPicker" value="#FFFFFF" />
-                      <span class="color-hex" id="supportColorHex">#FFFFFF</span>
-                    </div>
-                  </label>
-                </div>
-              </details>
+              <div class="control-group hero-only" id="heroControls">
+                <h4>Hero word</h4>
+                <label class="style-label">
+                  Hero size <output id="soHeroSizeScaleVal">2.3</output>×
+                  <input type="range" id="soHeroSizeScale" min="1" max="3.5" step="0.05" value="2.3" />
+                </label>
+              </div>
 
-              <!-- 5. EMPHASIS -->
-              <details class="style-accordion">
-                <summary>EMPHASIS</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Hero Size: <span id="heroSizeVal">120</span>px
-                    <input type="range" id="heroSizeSlider" min="60" max="200" value="120" />
-                  </label>
-                  <label class="style-label">
-                    Support Size: <span id="supportSizeVal">46</span>px
-                    <input type="range" id="supportSizeSlider" min="20" max="90" value="46" />
-                  </label>
-                </div>
-              </details>
+              <button class="style-btn danger-outline" id="resetStyleBtn">Reset to template defaults</button>
+            </div>
 
-              <!-- 6. SPACING -->
-              <details class="style-accordion">
-                <summary>SPACING</summary>
-                <div class="accordion-content">
-                  <label class="style-label">
-                    Letter Spacing: <span id="letterSpacingVal">0</span>px
-                    <input type="range" id="letterSpacingSlider" min="-5" max="15" value="0" />
-                  </label>
-                </div>
-              </details>
+            <!-- ── MOTION ── -->
+            <div class="inspector-panel hidden" data-panel="motion">
+              <div class="control-group">
+                <h4>Entry animation</h4>
+                <label class="style-label">
+                  Style
+                  <select id="soAnimationType">
+                    <option value="none">None</option>
+                    <option value="fade">Fade</option>
+                    <option value="pop">Pop</option>
+                    <option value="scale">Scale</option>
+                    <option value="zoom">Zoom</option>
+                    <option value="slide_up">Slide up</option>
+                    <option value="slide_down">Slide down</option>
+                    <option value="slide_left">Slide left</option>
+                    <option value="slide_right">Slide right</option>
+                    <option value="float">Float</option>
+                    <option value="flicker">Flicker</option>
+                    <option value="shake">Shake</option>
+                  </select>
+                </label>
+                <label class="style-label">
+                  Applies to
+                  <select id="soAnimationTarget">
+                    <option value="word">Each word</option>
+                    <option value="line">Whole line</option>
+                  </select>
+                </label>
+                <label class="style-label">
+                  Duration <output id="soAnimationDurationVal">240</output>ms
+                  <input type="range" id="soAnimationDuration" min="60" max="800" step="10" value="240" />
+                </label>
+              </div>
 
-              <!-- 7. EFFECTS -->
-              <details class="style-accordion">
-                <summary>EFFECTS</summary>
-                <div class="accordion-content">
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="strokeToggle" />
-                    <span>Enable Stroke border</span>
-                  </label>
-                  <label class="style-label">
-                    Stroke Color
-                    <div class="color-row">
-                      <input type="color" id="strokeColorPicker" value="#000000" />
-                      <span class="color-hex" id="strokeColorHex">#000000</span>
-                    </div>
-                  </label>
-                  <label class="style-label">
-                    Stroke Width: <span id="strokeWidthVal">0</span>px
-                    <input type="range" id="strokeWidthSlider" min="0" max="15" value="0" />
-                  </label>
-                </div>
-              </details>
+              <div class="control-group">
+                <h4>Highlight pop</h4>
+                <p class="control-hint">A quick bounce on each word as it is spoken.</p>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="soPopEnabled" checked />
+                  <span>Pop on spoken word</span>
+                </label>
+                <label class="style-label">
+                  Pop amount <output id="soPopScaleVal">1.16</output>×
+                  <input type="range" id="soPopScale" min="1" max="1.6" step="0.02" value="1.16" />
+                </label>
+              </div>
 
-              <!-- 8. SHADOWS -->
-              <details class="style-accordion">
-                <summary>SHADOWS</summary>
-                <div class="accordion-content">
-                  <label class="style-label-checkbox">
-                    <input type="checkbox" id="shadowToggle" checked />
-                    <span>Enable Drop Shadow</span>
-                  </label>
-                  <label class="style-label">
-                    Shadow Blur: <span id="shadowBlurVal">15</span>px
-                    <input type="range" id="shadowBlurSlider" min="0" max="30" value="15" />
-                  </label>
-                </div>
-              </details>
-              
-              <div class="canvas-bulk-tools">
-                <button class="style-btn" id="applyAllCoordsBtn">Apply to All Comps</button>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="lowResToggle" checked />
-                  <span>Low-res preview (Fast)</span>
+              <div class="control-group">
+                <h4>Reveal</h4>
+                <label class="style-label">
+                  Words on screen
+                  <select id="soReveal">
+                    <option value="all">Whole phrase</option>
+                    <option value="progressive">Appear as spoken</option>
+                  </select>
                 </label>
               </div>
             </div>
 
-            <!-- More Export Options -->
-            <div class="export-section">
-              <button class="export-main-btn" id="exportMainBtn">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Export MP4
-              </button>
-              <details class="more-exports">
-                <summary>More export options</summary>
-                <button class="export-alt-btn" id="exportSrtBtn">Download SRT</button>
-              </details>
+            <!-- ── EXPORT ── -->
+            <div class="inspector-panel hidden" data-panel="export">
+              <div class="control-group">
+                <h4>Video</h4>
+                <p class="control-hint">Captions are burned in at the source video's own resolution and frame rate.</p>
+                <button class="export-main-btn" id="exportMainBtn">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export MP4
+                </button>
+              </div>
+              <div class="control-group">
+                <h4>Subtitles &amp; transcript</h4>
+                <p class="control-hint">Generated from the same captions as the video, so they always match your edits.</p>
+                <div class="export-format-grid">
+                  <button class="export-alt-btn" data-text-format="srt">.srt</button>
+                  <button class="export-alt-btn" data-text-format="vtt">.vtt</button>
+                  <button class="export-alt-btn" data-text-format="txt">Transcript</button>
+                  <button class="export-alt-btn" data-text-format="txt-timestamps">Timestamped</button>
+                </div>
+              </div>
+              <div class="control-group">
+                <h4>Preview</h4>
+                <label class="style-label-checkbox">
+                  <input type="checkbox" id="lowResToggle" checked />
+                  <span>Low-res preview (faster)</span>
+                </label>
+              </div>
             </div>
           </div>
         </aside>
       </div>
 
-      <!-- â”€â”€â”€ BOTTOM PANEL: Timeline Ruler & Blocks â”€â”€â”€ -->
+      <!-- --- BOTTOM PANEL: Timeline Ruler & Blocks --- -->
       <div class="timeline-bar" id="timelineBar">
         <!-- State 1: Locked Timeline Placeholder -->
         <div id="unloadedTimelineState" class="unloaded-timeline-state">
@@ -382,18 +515,31 @@
           <div class="timeline-header">
             <span class="timeline-label">Timeline</span>
             <div class="timeline-zoom">
-              <button class="zoom-btn" id="zoomOutBtn">â€”</button>
+              <button class="zoom-btn" id="zoomOutBtn" aria-label="Zoom out">&minus;</button>
               <span class="zoom-level" id="zoomLevel">100%</span>
               <button class="zoom-btn" id="zoomInBtn">+</button>
             </div>
           </div>
-          <div class="timeline-viewport" id="timelineViewport">
-            <div class="timeline-content" id="timelineContent">
-              <div class="time-ruler" id="timeRuler"></div>
-              <div class="timeline-track" id="wordTrack"></div>
-              <div class="timeline-playhead" id="timelinePlayhead">
-                <div class="playhead-head"></div>
-                <div class="playhead-line"></div>
+          <div class="timeline-body">
+            <div class="track-gutter">
+              <span class="track-name">Words</span>
+              <span class="track-name">Video</span>
+              <span class="track-name">Audio</span>
+            </div>
+            <div class="timeline-viewport" id="timelineViewport">
+              <div class="timeline-content" id="timelineContent">
+                <div class="time-ruler" id="timeRuler"></div>
+                <div class="timeline-track" id="wordTrack"></div>
+                <div class="timeline-track timeline-track-film" id="videoTrack">
+                  <canvas id="filmstripCanvas"></canvas>
+                </div>
+                <div class="timeline-track timeline-track-audio" id="audioTrack">
+                  <canvas id="waveformCanvas"></canvas>
+                </div>
+                <div class="timeline-playhead" id="timelinePlayhead">
+                  <div class="playhead-head"></div>
+                  <div class="playhead-line"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -406,14 +552,28 @@
   <!-- Exporting Progress Modal -->
   <div class="modal-overlay hidden" id="exportModal">
     <div class="export-modal">
-      <h3 class="modal-title">Exporting Video</h3>
-      <p class="modal-subtitle" id="exportStatus">Initializing HD export render...</p>
-      <div class="progress-bar">
+      <h3 class="modal-title" id="exportTitle">Exporting video</h3>
+      <p class="modal-subtitle" id="exportStatus">Starting...</p>
+      <div class="progress-bar" id="exportProgressWrap">
         <div class="progress-fill" id="exportProgressFill" style="width: 0%;"></div>
       </div>
+
+      <!-- Shown when the render finishes. A link the user can click matters:
+           a browser may refuse a download it did not start from a click, and
+           without something visible there is nothing to fall back to. -->
+      <a class="export-main-btn hidden" id="exportDownloadLink" download>
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Save the video
+      </a>
+      <p class="export-error hidden" id="exportError"></p>
+
       <div class="modal-meta">
         <span id="exportPercent">0%</span>
+        <!-- Rendering happens on the server, so losing the connection does not
+             lose the video. This asks the server what became of it. -->
+        <button class="cancel-btn hidden" id="exportRetryBtn">Check again</button>
         <button class="cancel-btn" id="cancelExportBtn">Cancel</button>
+        <button class="cancel-btn hidden" id="exportCloseBtn">Close</button>
       </div>
     </div>
   </div>
@@ -427,6 +587,66 @@
     <button class="context-item" id="ctxAddBtn">Add Word After</button>
     <div class="context-divider"></div>
     <button class="context-item danger" id="ctxDeleteBtn">Delete Word</button>
+  </div>
+
+  <!-- Restyle one line, or one word inside it -->
+  <div id="stylePopover" class="style-popover hidden" role="dialog" aria-label="Restyle this line">
+    <div class="style-popover-head">
+      <span id="stylePopoverTitle">Line 1</span>
+      <button type="button" id="stylePopoverClose" title="Close">&times;</button>
+    </div>
+
+    <p class="style-popover-label">Apply to</p>
+    <div class="style-target-row" id="styleTargetRow"></div>
+
+    <p class="style-popover-label">Colour</p>
+    <div class="style-swatch-row" id="styleSwatchRow"></div>
+    <div class="control-row">
+      <input type="color" id="styleColor" aria-label="Custom colour" />
+      <button type="button" class="ghost-btn" id="styleColorClear">Default</button>
+    </div>
+
+    <p class="style-popover-label">Size <span id="styleSizeValue">100%</span></p>
+    <input type="range" id="styleSize" min="0.4" max="2.5" step="0.05" value="1" />
+
+    <p class="style-popover-label">Font</p>
+    <select id="styleFont"><option value="">Same as template</option></select>
+
+    <p class="style-popover-label">Casing</p>
+    <select id="styleCasing">
+      <option value="">Same as template</option>
+      <option value="none">As spoken</option>
+      <option value="upper">UPPERCASE</option>
+      <option value="lower">lowercase</option>
+      <option value="title">Title Case</option>
+    </select>
+
+    <div class="style-popover-actions">
+      <button type="button" class="ghost-btn" id="styleResetTarget">Reset this</button>
+      <button type="button" class="ghost-btn danger" id="styleResetLine">Reset whole line</button>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts reference -->
+  <div id="shortcutsModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
+    <div class="export-modal">
+      <h3 id="shortcutsTitle">Keyboard shortcuts</h3>
+      <dl class="shortcut-list">
+        <dt><kbd>Space</kbd></dt><dd>Play or pause</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></dt><dd>Redo</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>F</kbd></dt><dd>Find and replace</dd>
+        <dt><kbd>Click</kbd> a word</dt><dd>Make it the highlighted word</dd>
+        <dt><kbd>Right-click</kbd> a word</dt><dd>Split, combine, delete or spotlight</dd>
+        <dt><kbd>&#9681;</kbd> on a line</dt><dd>Colour, size or font for that line or one word in it</dd>
+        <dt><kbd>Drag</kbd> on the video</dt><dd>Move the captions</dd>
+        <dt><kbd>Drag</kbd> a corner handle</dt><dd>Resize the captions</dd>
+        <dt><kbd>Drag</kbd> a timeline block</dt><dd>Retime a word</dd>
+        <dt><kbd>MUFT CAPTIONS</kbd></dt><dd>Back to the homepage</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close this dialog</dd>
+      </dl>
+      <button class="modal-cancel-btn" id="closeShortcutsBtn">Close</button>
+    </div>
   </div>
 
   <!-- Fullscreen Password Protection Overlay (for VPS hosting) -->
@@ -445,8 +665,31 @@
     </div>
   </div>
 
-  <script src="/template-engine.js?v=2.0.1?v=2.0.1"></script>
-  <script src="/app.js?v=2.0.1?v=2.0.1"></script>
+  <!--
+    The caption renderer is loaded as a module straight from the server's own
+    source, so the preview is drawn by the exact same code that renders the
+    exported MP4 rather than a hand-synced browser copy.
+  -->
+  <script type="module">
+    import * as CaptionRenderer from '/renderer/caption-renderer.js';
+    import * as CaptionFonts from '/renderer/fonts.js';
+    import * as CaptionTemplates from '/renderer/templates.js';
+    import { applyStyleOverrides, sanitizeOverrides } from '/renderer/style-overrides.js';
+
+    CaptionRenderer.configureFonts({
+      fontString: CaptionFonts.fontString,
+      arabicFontString: (size) =>
+        `400 ${Math.round(size)}px "${CaptionFonts.ARABIC_FALLBACK_ALIAS}", sans-serif`
+    });
+
+    window.CaptionRenderer = CaptionRenderer;
+    window.CaptionFonts = CaptionFonts;
+    window.CaptionTemplates = CaptionTemplates;
+    window.applyStyleOverrides = applyStyleOverrides;
+    window.sanitizeOverrides = sanitizeOverrides;
+    window.dispatchEvent(new Event('caption-renderer-ready'));
+  </script>
+  <script src="/app.js?v=2.1.1"></script>
 </body>
 </html>
 

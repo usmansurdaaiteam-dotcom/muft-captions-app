@@ -10,9 +10,24 @@ projects/
 tmp/
 *.log
 
+# Generated template previews
+template-contact-sheet.png
+.font-tmp/
+
 # Environment & OS
 .env
 .env.local
 .env.*.local
 .DS_Store
 Thumbs.db
+cache/
+configs/
+
+# Uploaded fonts belong to the install, not the repo.
+assets/fonts/custom/
+
+# One-off download bundles, never committed.
+public/download/
+
+# Downloadable source packages, generated on demand
+public/muft-captions-*.zip
