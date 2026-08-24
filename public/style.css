@@ -227,6 +227,16 @@ input, select, textarea { font-family: var(--font-ui); }
   font-size: 15px;
   font-weight: 800;
   letter-spacing: 0.06em;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: inherit;
+}
+.topbar-logo:hover {
+  opacity: 0.82;
 }
 .topbar-logo span {
   color: var(--accent);

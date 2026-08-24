@@ -1496,6 +1496,18 @@ async function closeProject() {
 
 $('closeProjectBtn').addEventListener('click', closeProject);
 
+const homeBtn = $('homeBtn');
+if (homeBtn) {
+  homeBtn.addEventListener('click', () => {
+    if (document.body.classList.contains('project-loaded') ||
+        (processingState && !processingState.classList.contains('hidden'))) {
+      closeProject();
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+}
+
 // â”€â”€â”€ Caption List â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function renderCaptionList() {

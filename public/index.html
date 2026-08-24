@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=2.1.0" />
+  <link rel="stylesheet" href="/style.css?v=2.1.1" />
   <!-- Caption fonts, served from the same files the export renderer uses. -->
   <link rel="stylesheet" href="/caption-fonts.css" />
 </head>
@@ -21,7 +21,7 @@
     <!-- Top Bar -->
     <header class="editor-topbar">
       <div class="topbar-left">
-        <div class="topbar-logo">MUFT <span>CAPTIONS</span></div>
+        <button type="button" class="topbar-logo" id="homeBtn" title="Back to homepage">MUFT <span>CAPTIONS</span></button>
         <span class="topbar-filename" id="topbarFilename"></span>
       </div>
       <div class="topbar-right">
@@ -642,6 +642,7 @@
         <dt><kbd>Drag</kbd> on the video</dt><dd>Move the captions</dd>
         <dt><kbd>Drag</kbd> a corner handle</dt><dd>Resize the captions</dd>
         <dt><kbd>Drag</kbd> a timeline block</dt><dd>Retime a word</dd>
+        <dt><kbd>MUFT CAPTIONS</kbd></dt><dd>Back to the homepage</dd>
         <dt><kbd>Esc</kbd></dt><dd>Close this dialog</dd>
       </dl>
       <button class="modal-cancel-btn" id="closeShortcutsBtn">Close</button>
@@ -688,7 +689,7 @@
     window.sanitizeOverrides = sanitizeOverrides;
     window.dispatchEvent(new Event('caption-renderer-ready'));
   </script>
-  <script src="/app.js?v=2.1.0"></script>
+  <script src="/app.js?v=2.1.1"></script>
 </body>
 </html>
 
